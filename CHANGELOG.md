@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.17.0 - 2026-11-27
+
+Phase 5: automatic wind and seismic loads by every code the programs offer. 2 new actions (autoload.py).
+- `describe_auto_load_code` (SAP2000, ETABS): the wind or seismic codes the program offers (SAP2000 27.1: 28 wind,
+  22 seismic; ETABS 23.2: 28 wind and its seismic tables), or one code's parameters - SAP2000: the API call's
+  parameter names and types, read from the program's type library at run time, with the program's own field
+  descriptions and units; ETABS: the code's input table fields with units and descriptions.
+- `set_auto_load` (SAP2000, ETABS): a wind / quake pattern becomes an automatic load by any of those codes
+  (Eurocode 1 / 8, IS 875 / 1893, NBCC, ASCE 7, BS 6399, Chinese, Italian NTC, AS/NZS 1170, KBC, TCVN ...) with the
+  designer's parameters. SAP2000: the code's own typed call (all parameters required except the program-decided load
+  range; types checked; unknown names refused); ETABS: the code's input table (unknown fields refused; fields not
+  given take ETABS' value, listed as program_values_not_given). Read back and compared; values the chosen options do
+  not use (e.g. Ct with a user period) are reported as not kept by the program.
+- Measured with Eurocode 8 (CEN Default, type 1, ground B, ag 0.16 g, q 3.9, T 0.4 s): SAP2000's integer options are
+  Country 1 = CEN Default, GroundType 2 = B, PeriodFlag 3 = user, DirFlag 1 = X (its table read back S 1.2, Tb 0.15,
+  Tc 0.5); base shear = Sd(T) W exactly in both programs (Sd 0.123077; 427.292 kN SAP2000, 417.877 kN ETABS, each
+  with its own seismic weight).
+- Measured with Eurocode 1 (vb 26 m/s, terrain II = 2, rho 1.25, Cpw 0.8, Cpl 0.5): SAP2000 takes the leeward
+  pressure as qp at z_min for every level (55.680 / 21.436 kN, matched to 1e-10); ETABS takes windward and leeward
+  qp at each height z, integrated (39.490 / 23.237 kN, matched to 1e-4). EN 1991-1-4 7.2.2 (h <= b) uses z_e = h for
+  the leeward face - the action's answer says so.
+
 ## 0.16.0 - 2026-11-27
 
 Phase 5: wind loads. 2 new actions, 1 extended.

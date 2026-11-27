@@ -18,7 +18,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "results" / "wind_output"
-os.environ["CSI_MCP_OUTPUT"] = str(OUT)
+if __name__ == "__main__":
+    os.environ["CSI_MCP_OUTPUT"] = str(OUT)
 
 from live_common import FAILED, bridge, check, com, finish, show  # noqa: E402,I001
 
@@ -221,22 +222,27 @@ def run(sw: str) -> None:
     check(f"{sw}: base shear WY = -50 kN", by is not None and abs(by + 50.0) < 0.05, {"FY": by})
 
 
-if OUT.exists():
-    shutil.rmtree(OUT, ignore_errors=True)
-(OUT / "models").mkdir(parents=True, exist_ok=True)
-for sw in targets:
-    print(f"\n################ {sw} (new instance, visible={visible})", flush=True)
-    t0 = len(FAILED)
-    try:
-        com(bridge.launch_new, sw, visible=visible)
-        run(sw)
-    except Exception as exc:  # noqa: BLE001
-        FAILED.append(f"{sw}: {type(exc).__name__}: {exc}")
-        print("EXCEPTION", exc, flush=True)
-    finally:
+def main() -> int:
+    if OUT.exists():
+        shutil.rmtree(OUT, ignore_errors=True)
+    (OUT / "models").mkdir(parents=True, exist_ok=True)
+    for sw in targets:
+        print(f"\n################ {sw} (new instance, visible={visible})", flush=True)
+        t0 = len(FAILED)
         try:
-            print(com(bridge.disconnect, sw, True, False), flush=True)
+            com(bridge.launch_new, sw, visible=visible)
+            run(sw)
         except Exception as exc:  # noqa: BLE001
-            print("close", exc, flush=True)
-    print(f"{sw}: {'OK' if len(FAILED) == t0 else 'FAILED'}", flush=True)
-sys.exit(finish())
+            FAILED.append(f"{sw}: {type(exc).__name__}: {exc}")
+            print("EXCEPTION", exc, flush=True)
+        finally:
+            try:
+                print(com(bridge.disconnect, sw, True, False), flush=True)
+            except Exception as exc:  # noqa: BLE001
+                print("close", exc, flush=True)
+        print(f"{sw}: {'OK' if len(FAILED) == t0 else 'FAILED'}", flush=True)
+    return finish()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

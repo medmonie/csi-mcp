@@ -1652,3 +1652,19 @@ def test_wind_params():
     with pytest.raises(ValidationError):
         WindP(**base, Cpw=0.8)                       # Cpw without Cpl
     assert abs(40 * MPH["m/s"] - 89.4775) < 1e-3
+
+
+def test_autoload_code_matching():
+    import pytest
+    import autoload as al
+    from csi_bridge import CSIValidationError
+    codes = ["Eurocode12005", "IS8752015", "IS8751987", "NBCC2015", "ASCE716"]
+    assert al.resolve_code(codes, "Eurocode 1 2005") == "Eurocode12005"
+    assert al.resolve_code(codes, "is 875-2015") == "IS8752015"
+    with pytest.raises(CSIValidationError):
+        al.resolve_code(codes, "IS875")                  # two match: refused, not guessed
+    assert al._coerce("Terrain", "int", 2.0) == 2
+    with pytest.raises(CSIValidationError):
+        al._coerce("Terrain", "int", 2.5)
+    assert al._coerce("UserZ", "bool", "Yes") is True
+    assert al._same(0.12307692, 0.123076920001) and not al._same("B", "C")

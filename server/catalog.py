@@ -12,7 +12,7 @@ import edition
 import programs
 from actions import ACTIONS, Action
 
-SERVER_VERSION = "0.16.0"   # keep CHANGELOG.md in step; the tests check it
+SERVER_VERSION = "0.17.0"   # keep CHANGELOG.md in step; the tests check it
 
 UNITS_NOTE = (
     "UNITS: every action that reads or writes numbers takes params.units (default kN_m_C = kN, m, C; also Ton_m_C, "

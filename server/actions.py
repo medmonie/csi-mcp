@@ -904,5 +904,6 @@ import geometry  # noqa: E402,F401 - registers the Phase 4 geometry actions
 import model_spec  # noqa: E402,F401 - registers new_model and build_model_from_spec
 import design  # noqa: E402,F401 - registers the Phase 6 design actions
 import program_specific  # noqa: E402,F401 - registers the Phase 5 actions
+import autoload  # noqa: E402,F401 - registers the automatic wind / seismic loads by any code
 import results  # noqa: E402,F401 - registers the Phase 2 results actions
 import report  # noqa: E402,F401 - registers export_report (report.py builds on the actions above)
