@@ -525,6 +525,18 @@ class LoadCaseP(_DefP):
         description="nonlinear_static: none (default) | p_delta[[S: | p_delta_large_displacements]]")
     initial_case: str | None = Field(default=None, description=(
         "nonlinear_static: start from the end of this nonlinear case (default: zero initial conditions)"))
+    load_control: Literal["full_load", "displacement"] = Field(default="full_load", description=(
+        "nonlinear_static: full_load (default) | displacement (pushover: push to target_displacement at "
+        "monitor_point in monitor_dof)"))
+    monitor_point: str | None = Field(default=None, description="displacement control: the monitored point")
+    monitor_dof: Literal["U1", "U2", "U3", "R1", "R2", "R3"] = Field(default="U1", description=(
+        "displacement control: monitored degree of freedom (global)"))
+    target_displacement: float | None = Field(default=None, description=(
+        "displacement control: target displacement at the monitored point (present units)"))
+    save_steps: bool = Field(default=False, description=(
+        "nonlinear_static: save multiple states (a pushover curve) instead of the final state only"))
+    min_saved_states: int = Field(default=10, ge=1, le=10000, description="save_steps: minimum number of states")
+    max_saved_states: int = Field(default=100, ge=1, le=10000, description="save_steps: maximum number of states")
 
     @model_validator(mode="after")
     def _check(self) -> "LoadCaseP":
@@ -533,6 +545,8 @@ class LoadCaseP(_DefP):
             raise ValueError(f"{self.type} needs loads")
         if self.min_modes > self.max_modes:
             raise ValueError("min_modes is above max_modes")
+        if self.load_control == "displacement" and (not self.monitor_point or self.target_displacement is None):
+            raise ValueError("displacement control needs monitor_point and target_displacement")
         dyn = self.type in ("response_spectrum", "linear_modal_history")
         for ld in self.loads or []:
             if ld.kind == "acceleration":
@@ -682,7 +696,14 @@ def define_load_case(p: LoadCaseP) -> dict[str, Any]:
     if p.type == "linear_modal_history":
         plan.update(steps=p.steps, step_size=p.step_size)
     if p.type == "nonlinear_static":
-        plan.update(geometric_nonlinearity=p.geometric_nonlinearity, initial_case=p.initial_case)
+        plan.update(geometric_nonlinearity=p.geometric_nonlinearity, initial_case=p.initial_case,
+                    load_control=p.load_control, save_steps=p.save_steps)
+        if p.load_control == "displacement":
+            plan.update(monitor_point=p.monitor_point, monitor_dof=p.monitor_dof,
+                        target_displacement=p.target_displacement)
+            pts = bridge.try_name_list(sap, ["PointObj"])[0] or []
+            if p.monitor_point not in pts:
+                raise CSIValidationError(f"Monitor point '{p.monitor_point}' is not in the model.")
         if p.initial_case:
             have = bridge.try_name_list(sap, ["LoadCases"])[0] or []
             if p.initial_case not in have:
@@ -707,6 +728,19 @@ def define_load_case(p: LoadCaseP) -> dict[str, Any]:
                  {"none": 0, "p_delta": 1, "p_delta_large_displacements": 2}[p.geometric_nonlinearity])
         if p.initial_case:
             api_call("LoadCases.StaticNonlinear.SetInitialCase", nl.SetInitialCase, p.name, p.initial_case)
+        dof = ["U1", "U2", "U3", "R1", "R2", "R3"].index(p.monitor_dof) + 1
+        if p.load_control == "displacement":   # (full load is the program's default: SetLoadApplication with
+            with bridge.units_scope(sap, p.units):  # LoadControl 1 and no monitor point returns 1 - measured)
+                # LoadControl 2 = displacement; DispType 2 = monitored; Monitor 1 = a point DOF
+                api_call("LoadCases.StaticNonlinear.SetLoadApplication", nl.SetLoadApplication, p.name, 2, 2,
+                         float(p.target_displacement or 0.0), 1, dof, p.monitor_point or "", "")
+        if p.save_steps:
+            api_call("LoadCases.StaticNonlinear.SetResultsSaved", nl.SetResultsSaved, p.name, True,
+                     p.min_saved_states, p.max_saved_states, True)
+        la = _try(sap, "LoadCases.StaticNonlinear.GetLoadApplication", p.name, 0, 0, 0.0, 0, 0, "", "")
+        if la:
+            extra["load_application_read_back"] = {"load_control": int(la[0]), "displacement": float(la[2]),
+                                                   "dof": int(la[4]), "point": str(la[5])}
     elif p.type == "modal_eigen":
         api_call("LoadCases.ModalEigen.SetCase", lc.ModalEigen.SetCase, p.name)
         api_call("LoadCases.ModalEigen.SetNumberModes", lc.ModalEigen.SetNumberModes, p.name, p.max_modes,

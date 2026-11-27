@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.19.0 - 2026-11-27
+
+Phase 5 completed for SAP2000: cables, solids, tendon objects, staged construction, frame hinges with pushover,
+moving loads. 11 new actions (sap_objects.py, sap_analysis.py), 2 extended; each checked against a hand calculation.
+- `define_cable_property`, `create_cables`: cables between points with the designer's shape parameter (tension at
+  an end, horizontal tension, maximum or low-point sag, undeformed length) and segments; the shape the program
+  computed is read back (tensions, sags, lengths). Measured: 20 m span, w = 0.077 kN/m, maximum sag 1 m - nonlinear
+  self weight with large displacements gives an end horizontal reaction of 3.86270 kN against the catenary 3.86277 kN.
+- `define_solid_property`, `create_solids`: 8-node solids by corner points or coordinates; volume computed and read
+  back (zero or negative means a wrong corner order). Measured: two stacked 1 m cubes, 100 kN - top settlement
+  8.000e-6 m = P h / (E A) exactly.
+- `create_tendon_objects` and `define_tendon_property` in SAP2000 (modelled as loads or as elements): 3D tendon paths
+  with jacking force or stress, jacking end, friction, anchorage set and losses from the designer. Measured: 10 m
+  beam, straight tendon 0.2 m below the axis, 1000 kN - M3 = 200.0 kN m, P = -1000.0 kN.
+- `define_staged_construction`: stages with duration and operations (add / remove structure by group with age, load
+  on new or all objects, section / modifier / release changes), geometric nonlinearity, initial case; read back.
+  Measured: two 8 m spans built one after the other, each loaded as it is added - M at the middle support 39.84 kN m
+  (w L^2 / 16 = 40) against 79.68 kN m (w L^2 / 8 = 80) for the same loads at once.
+- `describe_hinge_tables`, `assign_frame_hinges`: auto hinges by ASCE 41-13 / 41-17, FEMA 356, Caltrans or user
+  hinge properties through the program's hinge tables, values from the designer; refused when the table's material
+  (steel / concrete) does not match the frames (SAP2000 otherwise shows a blocking 'Error in regenerating hinges'
+  message). The program places a point hinge at the middle of its hinge length (relative distance 0 with a 0.3 m
+  length = 0.15 m from the end) - read back as actual_distance.
+- `define_load_case` nonlinear_static: load_control displacement (pushover to a target displacement at a monitored
+  point and degree of freedom) and multiple saved states. Measured: steel cantilever 3 m with an ASCE 41-17 M3 hinge -
+  the generated hinge's yield moment = Z Fye (235.1194 kN m) and the pushover yields at V (H - 0.15) = 235.1194 kN m.
+- `define_lane`, `define_vehicles`, `define_moving_load_case`: lanes along frames, the program's standard vehicles
+  (HL-93, Hn-44, HSn-44 ...; written as one set because the program's vehicle table cannot be read back through the
+  API), vehicle classes, moving-load cases with lanes loaded and multi-lane factors. Measured: H20-44 on a 20 m simple
+  span - maximum moment 815.2908 kN m against the influence-line maximum 815.2907 kN m; end shear 170.34 kN.
+- Database table edits: SAP2000 refuses the editing read for empty tables - their fields now come from
+  GetAllFieldsInTable; a field left out of a new row is filled with the program's default; the import counts were
+  read one place off (the return code was taken as the info count) - fixed.
+
 ## 0.18.0 - 2026-11-27
 
 Phase 5: floors - design strips, post-tensioning tendons, towers. 4 new actions (slabs.py), 2 extended.

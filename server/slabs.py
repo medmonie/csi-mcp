@@ -27,10 +27,14 @@ class TendonPropP(_EditP):
     material: str = Field(description="a tendon material (define_material type tendon)")
     strand_area: float = Field(gt=0, description="area of one strand")
     replace: bool = Field(default=False, description="change an existing property")
+    modelling: Literal["loads", "elements"] = Field(default="loads", description=(
+        "[[S:loads: the tendon acts on the objects it passes through as loads | elements: modelled as elements "
+        "bonded to them]][[EF:SAFE / ETABS: loads]]"))
 
 
 @action("define_tendon_property", "Create or change a tendon (strand) property: tendon material and the area of one "
-        "strand. Answers with the property read back.", "Definitions", "edit", TendonPropP, programs="EF")
+        "strand[[S:, modelled as loads or as elements]]. Answers with the property read back.", "Definitions", "edit",
+        TendonPropP, programs="EFS", fields={"modelling": "S"})
 def define_tendon_property(p: TendonPropP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
     have = bridge.try_name_list(sap, ["PropTendon"])[0] or []
@@ -44,9 +48,11 @@ def define_tendon_property(p: TendonPropP) -> dict[str, Any]:
         return _dry(plan, model_locked=bridge.is_locked(sap))
     with bridge.units_scope(sap, p.units):
         snap, was_locked = _start_edit(p, sap, "before_tendon_property", "define a tendon property")
-        api_call("PropTendon.SetProp", sap.PropTendon.SetProp, p.name, p.material, 1, p.strand_area, -1, "", "")
+        api_call("PropTendon.SetProp", sap.PropTendon.SetProp, p.name, p.material,
+                 2 if p.modelling == "elements" else 1, p.strand_area, -1, "", "")
         o = api_call("PropTendon.GetProp", sap.PropTendon.GetProp, p.name, "", 0, 0.0, 0, "", "")
-    back = {"material": str(o[0]), "strand_area": float(o[2])}
+    back = {"material": str(o[0]), "strand_area": float(o[2]),
+            "modelling": {1: "loads", 2: "elements"}.get(int(o[1]), str(o[1]))}
     if back["material"] != p.material or abs(back["strand_area"] - p.strand_area) > 1e-9 * max(1, p.strand_area):
         raise CSIValidationError(f"Read back differs: {back}")
     return {**plan, "read_back": back, "model_was_unlocked": was_locked, **({"snapshot": snap} if snap else {})}

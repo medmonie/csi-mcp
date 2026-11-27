@@ -906,5 +906,7 @@ import design  # noqa: E402,F401 - registers the Phase 6 design actions
 import program_specific  # noqa: E402,F401 - registers the Phase 5 actions
 import autoload  # noqa: E402,F401 - registers the automatic wind / seismic loads by any code
 import slabs  # noqa: E402,F401 - registers strips, PT tendons and towers
+import sap_objects  # noqa: E402,F401 - registers SAP2000 cables, solids, tendon objects
+import sap_analysis  # noqa: E402,F401 - registers staged construction, hinges, moving loads
 import results  # noqa: E402,F401 - registers the Phase 2 results actions
 import report  # noqa: E402,F401 - registers export_report (report.py builds on the actions above)
