@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.18.0 - 2026-11-27
+
+Phase 5: floors - design strips, post-tensioning tendons, towers. 4 new actions (slabs.py), 2 extended.
+- `define_tendon_property` (SAFE, ETABS): a tendon section (material, area of one strand); read back.
+- `create_strips` (SAFE, ETABS): design strips by centre line, widths left / right, layer A / B / other, optional
+  column / middle strip design type (strip-based design overwrites); existing names refused; read back.
+- `create_tendons` (SAFE, ETABS): straight-in-plan tendons with a parabola or reverse-parabola profile (end heights
+  and low point measured from the slab top, low-point position), tendon property, strands, bonded / unbonded,
+  jacking stress and end, transfer / final load patterns, fixed losses; written through the program's tendon tables
+  and read back.
+- `manage_towers` (ETABS): list, allow multiple towers, add, copy, rename, delete, set active.
+- `define_load_pattern`: prestress types prestressfinal / prestresstransfer (SAFE, ETABS; codes 34 / 59 measured).
+- `define_material` type tendon (and rebar): the programs keep these as uniaxial materials, so E and the thermal
+  coefficient go through the uniaxial calls (Poisson not used); material reads show uniaxial: true.
+- Measured in SAFE (10 m simply supported one-way slab, 0.25 m, parabolic tendon with 0.085 m drape, 4 x 98.7 mm2
+  at 1400 MPa, no losses): strip axial force -552.71 kN against P = 552.72 kN; SAFE gives the strip moment about the
+  slab top (the area object's plane): 69.06 kN m at the ends (P t/2) and 116.07 kN m at midspan, i.e. 46.98 kN m
+  about mid-depth = P e exactly.
+- ETABS -> SAFE export: measured, there is no API route (SAFE ImportFile returns 0 but imports nothing, or opens
+  its import dialogs), so it moves to the Later item model translation.
+
 ## 0.17.0 - 2026-11-27
 
 Phase 5: automatic wind and seismic loads by every code the programs offer. 2 new actions (autoload.py).

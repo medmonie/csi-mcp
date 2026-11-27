@@ -602,6 +602,10 @@ def read_materials(sap: Any, names: list[str] | None) -> list[dict[str, Any]]:
         iso = _try(sap, "PropMaterial.GetMPIsotropic", n)
         if iso:
             rec.update(E=_r(iso[0]), poisson=_r(iso[1]), thermal_coeff=_r(iso[2], 10), G=_r(iso[3]))
+        else:
+            uni = _try(sap, "PropMaterial.GetMPUniaxial", n)
+            if uni:
+                rec.update(E=_r(uni[0]), thermal_coeff=_r(uni[1], 10), uniaxial=True)
         wm = _try(sap, "PropMaterial.GetWeightAndMass", n)
         if wm:
             rec.update(weight_per_volume=_r(wm[0]), mass_per_volume=_r(wm[1]))

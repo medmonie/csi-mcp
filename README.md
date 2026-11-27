@@ -16,7 +16,7 @@ program**, each with one tool named after it: **`etabs(action, params)`, `sap200
 | ETABS | 23.2.0 | OK | OK |
 | SAFE | 23.3.2 | OK | OK |
 
-Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.17.0
+Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.18.0
 (roadmap Phases 0-2 with V1 verification: 238 / 238 values match CSI's published results: foundation, full model read, results depth; report stages R1-R3; Phase 3 first batch:
 area mesh, joint patterns, area loads; 0.7.0: one server per program; 0.8.0: definitions - materials, sections,
 springs, patterns, cases, combinations, mass source; 0.9.0: objects - points, frames, areas, their assignments,
@@ -175,6 +175,7 @@ one automatically when the rows are cut to `max_rows`, or always with `export: c
 | `tests\run_live_diagrams.bat [..] [--keep-open]` | 0.15.0: result diagrams on multi-bay, multi-storey models (12 slabs, a wall) in SAP2000 and ETABS and a SAFE example copy - frame M / V / P per elevation, slab and wall contours - written as reports to compare with the programs' own displays; models kept. `run_live_diagrams_b.bat` writes to `diagrams_output_b` (use it while a model in `diagrams_output` is open) | `tests\results\live_diagrams.txt`, `tests\results\diagrams_output\` |
 | `tests\run_live_wind.bat [SAP2000] [ETABS] [--hidden]` | 0.16.0: ASCE 7-16 auto wind on diaphragms and user wind loads in SAP2000 and ETABS (3 x 2 bays, 2 storeys, a diaphragm per floor): story forces against a hand calculation (each program's own distribution), user-load base shear | `tests\results\live_wind.txt`, models in `tests\results\wind_output\` |
 | `tests\run_live_autoload.bat [SAP2000] [ETABS] [--describe] [--hidden]` | 0.17.0: automatic loads by any code - describe_auto_load_code (code lists, parameters) and set_auto_load with Eurocode 1 wind and Eurocode 8 seismic on the live_wind building; story forces / base shear against hand calculations | `tests\results\live_autoload.txt` |
+| `tests\run_live_slabs.bat [SAFE] [ETABS] [--hidden]` | 0.18.0: tendon property, PT load patterns, parabolic tendon and design strip on a simply supported slab (SAFE: strip axial = -P, moment = P e about mid-depth after analysis), ETABS towers | `tests\results\live_slabs.txt` |
 | `tests\run_diag_wind.bat` | 0.16.0 probe: auto wind API methods (with parameter names) and wind tables in SAP2000 / ETABS | `tests\results\diag_wind.txt` |
 | `tests\run_verify_v4.bat [--hidden]` | V4: copies of CSI's ETABS design examples (ACI 318-19 Ex001 / Ex002, AISC 360-16 Ex001 / Ex002) designed through the actions with the code and combinations they hold, compared with CSI's published values; design report per example | `tests\results\verify_v4.txt`, `tests\results\verify\v4\` |
 | `tests\run_diag_phase5.bat` | raw API: SetASCE716 vs SetASCE716_1 in ETABS / SAP2000, auto seismic tables, SAP2000 design table names | `tests\results\diag_phase5.txt` |

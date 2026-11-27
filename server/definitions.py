@@ -141,11 +141,18 @@ def define_material(p: MaterialP) -> dict[str, Any]:
         else:
             stored = p.name
             api_call("PropMaterial.SetMaterial", sap.PropMaterial.SetMaterial, p.name, MAT_TYPE_CODES[p.type])
-            iso = api_call("PropMaterial.GetMPIsotropic", sap.PropMaterial.GetMPIsotropic, p.name)
-            alpha = p.thermal_coeff if p.thermal_coeff is not None else float(iso[2])
+            iso = _try(sap, "PropMaterial.GetMPIsotropic", p.name)
+            if iso is None:            # rebar / tendon are uniaxial in the programs (measured: tendon)
+                uni = api_call("PropMaterial.GetMPUniaxial", sap.PropMaterial.GetMPUniaxial, p.name)
+                alpha = p.thermal_coeff if p.thermal_coeff is not None else float(uni[1])
+                api_call("PropMaterial.SetMPUniaxial", sap.PropMaterial.SetMPUniaxial, p.name, p.E, alpha)
+                kept.append("poisson (uniaxial material: not used)")
+            else:
+                alpha = p.thermal_coeff if p.thermal_coeff is not None else float(iso[2])
+                api_call("PropMaterial.SetMPIsotropic", sap.PropMaterial.SetMPIsotropic, p.name, p.E, p.poisson,
+                         alpha)
             if p.thermal_coeff is None:
                 kept.append("thermal_coeff")
-            api_call("PropMaterial.SetMPIsotropic", sap.PropMaterial.SetMPIsotropic, p.name, p.E, p.poisson, alpha)
             api_call("PropMaterial.SetWeightAndMass", sap.PropMaterial.SetWeightAndMass, p.name, 1, p.unit_weight)
             kept += _set_strengths(sap, p)
         _refresh_view(sap)

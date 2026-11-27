@@ -133,7 +133,7 @@ SPECS: dict[str, SoftwareSpec] = {
 LOAD_PATTERN_TYPES = {
     1: "Dead", 2: "SuperDead", 3: "Live", 4: "ReduceLive", 5: "Quake", 6: "Wind",
     7: "Snow", 8: "Other", 9: "Move", 10: "Temperature", 11: "RoofLive", 12: "Notional",
-    13: "PatternLive",
+    13: "PatternLive", 34: "PrestressFinal", 59: "PrestressTransfer",   # prestress: measured in SAFE / ETABS
 }
 LOAD_CASE_TYPES = {
     1: "LinearStatic", 2: "NonlinearStatic", 3: "Modal", 4: "ResponseSpectrum",
