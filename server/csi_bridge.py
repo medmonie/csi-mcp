@@ -34,6 +34,7 @@ import logging
 import os
 import queue
 from pathlib import Path
+import re
 import sys
 import threading
 import time
@@ -180,6 +181,28 @@ class CSIValidationError(CSIError):
 
 
 # --------------------------------------------------------------------------- #
+# Paths given by the model
+# --------------------------------------------------------------------------- #
+
+# Folder variables a path may use. Nothing else in the environment is expanded (other names stay as typed): a path
+# parameter must not be a way to read variables (API keys, tokens) back through the path echoed in an answer or an
+# error message.
+PATH_VARIABLES = ("USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMFILES",
+                  "PUBLIC", "TEMP", "TMP", "ONEDRIVE", "ONEDRIVECOMMERCIAL", "ONEDRIVECONSUMER", "CSI_MCP_OUTPUT")
+_PATH_VAR = re.compile(r"%([^%\\/:]+)%|\$\{([^}]+)\}|\$(\w+)")
+
+
+def user_path(text: str) -> str:
+    """Absolute path from a path parameter: ~ and the folder variables above are expanded, nothing else."""
+    def expand(found: re.Match) -> str:
+        name = next(g for g in found.groups() if g)
+        if name.upper() not in PATH_VARIABLES:
+            return found.group(0)      # e.g. a folder called $2026, ETABS' model.$et, or a variable not for paths
+        return os.environ.get(name) or os.environ.get(name.upper()) or found.group(0)
+    return os.path.abspath(os.path.expanduser(_PATH_VAR.sub(expand, str(text))))
+
+
+# --------------------------------------------------------------------------- #
 # Return-code helpers
 # --------------------------------------------------------------------------- #
 
@@ -245,6 +268,7 @@ class ComExecutor:
         self._closed = False
         self._lock = threading.Lock()
         self._ready: Future = Future()
+        self._joined = False
         self._thread = threading.Thread(target=self._loop, name="csi-com-sta", daemon=True)
         self._thread.start()
 
@@ -316,6 +340,9 @@ class ComExecutor:
                     pending[0].cancel()
                     self._slots.release()
                 self._queue.put_nowait(before_uninit)
+        if self._joined:      # main() and atexit both call this: wait for a running CSI call once, not twice
+            return
+        self._joined = True
         self._thread.join(timeout=timeout)
         if self._thread.is_alive():
             log.warning("CSI call still running at shutdown. Verify the model before retrying.")
@@ -621,7 +648,7 @@ class CSIBridge:
 
     def open_model(self, software: str, file_path: str) -> str:
         spec = self.spec(software)
-        path = os.path.abspath(os.path.expandvars(os.path.expanduser(file_path)))
+        path = user_path(file_path)
         if not os.path.isfile(path):
             raise CSIValidationError(f"Model file not found: {path}")
         ext = os.path.splitext(path)[1].lower()
@@ -644,7 +671,7 @@ class CSIBridge:
                 hint=f"Call open_or_save_model with action='save' and a file_path ending in "
                 f"{spec.model_extensions[0]}.",
             )
-        target = os.path.abspath(os.path.expandvars(os.path.expanduser(target)))
+        target = user_path(target)
         if os.path.splitext(target)[1].lower() not in spec.model_extensions:
             raise CSIValidationError(f"{spec.name} models must be saved as {spec.model_extensions[0]}.")
         folder = os.path.dirname(target)

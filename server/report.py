@@ -16,7 +16,6 @@ from collections import defaultdict
 
 import datetime as dt
 import math
-import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,7 +27,7 @@ from actions import (
     bridge, get_analysis_summary, list_definitions,
 )
 import diagrams as dg
-from csi_bridge import CSIError, Software, UnitPreset, api_call, as_list, describe_units
+from csi_bridge import CSIError, Software, UnitPreset, api_call, as_list, describe_units, user_path
 from model_read import report_geometry
 import results as rs
 from table_tools import (
@@ -801,7 +800,7 @@ def _where(g: dict[str, Any]) -> str:
 
 def _target(p: ReportP) -> Path:
     if p.output_path:
-        path = Path(os.path.expandvars(os.path.expanduser(p.output_path))).resolve()
+        path = Path(user_path(p.output_path)).resolve()
         if path.suffix.lower() != "." + p.format:
             raise TableError(f"output_path must end in .{p.format} (format {p.format})")
         if not path.parent.is_dir():

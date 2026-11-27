@@ -251,7 +251,7 @@ class SDShape(Params):
         "| rebar_line | rebar_circle"))
     material: str | None = Field(default=None, description="shape material (default: the section's material)")
     center: list[float] | None = Field(default=None, min_length=2, max_length=2, description=(
-        "[x, y] of the shape centre: x along the section's local 2 axis, y along local 3"))
+        "[x, y] of the shape centre: x horizontal (local 3), y vertical (local 2)"))
     height: float | None = Field(default=None, gt=0, description="depth (along y)")
     width: float | None = Field(default=None, gt=0, description="width (along x); flange width of steel shapes")
     flange_thickness: float | None = Field(default=None, gt=0, description="steel shapes / tube")
@@ -445,13 +445,14 @@ def etabs_import_sd(sap: Any, p: "SDP") -> dict[str, Any]:
     return {"tables": [k for k, *_ in items], **res}
 
 
-@action("define_section_designer_section", "Create or change a Section Designer section in SAP2000 from the "
-        "designer's shapes: solid rectangles, circles and polygons (optionally reinforced: edge / corner bars, "
-        "circular bars), steel I / tee / angle / channel / tube / pipe / plate shapes and single, line or circular "
-        "bars, at their coordinates (x along local 2, y along local 3), with the design type (none, general steel, "
-        "concrete column check / design). Answers with the shapes and the section properties read back.[[E: ETABS "
-        "takes concrete solid_rect and solid_circle (without bars inside), i_section, tube, pipe, plate and single / "
-        "line / circular bars, through its Section Designer tables (draw polygons in the program).]]",
+@action("define_section_designer_section", "Create or change a Section Designer section from the designer's "
+        "shapes at their coordinates (x horizontal along local 3, y vertical along local 2: I33 is about the "
+        "horizontal axis), with the design type (none, general steel, concrete column check / design): [[S:solid "
+        "rectangles, circles and polygons (optionally reinforced: edge / corner bars, circular bars), steel I / tee "
+        "/ angle / channel / tube / pipe / plate shapes and single, line or circular bars]][[E:concrete solid "
+        "rectangles and circles (without bars inside), steel I / tube / pipe / plate shapes and single, line or "
+        "circular bars, through ETABS's Section Designer tables (draw polygons in the program)]]. Answers with the "
+        "shapes and the section properties read back.",
         "Definitions", "edit", SDP, programs="ES")
 def define_section_designer_section(p: SDP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)

@@ -9,7 +9,6 @@ row counts. Uses openpyxl, which the server already has.
 from __future__ import annotations
 
 import datetime as dt
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,7 @@ from pydantic import Field
 import safety
 from actions import (SOFTWARE, UNITS, Params, _read_selected, _selection, _status_core, action, bridge)
 from autoload import table_fields
-from csi_bridge import Software, UnitPreset, describe_units
+from csi_bridge import Software, UnitPreset, describe_units, user_path
 from table_tools import TableError, filter_by_cases, resolve_exact_key, rows_to_dataframe, suggest_keys
 
 MAX_ROWS = 1_048_000
@@ -51,7 +50,7 @@ def _sheet_name(key: str, used: set[str]) -> str:
 
 def _target(p: ExcelP, model_file: str | None) -> Path:
     if p.output_path:
-        path = Path(os.path.expandvars(os.path.expanduser(p.output_path))).resolve()
+        path = Path(user_path(p.output_path)).resolve()
         if path.suffix.lower() != ".xlsx":
             raise TableError("output_path must end in .xlsx")
         if not path.parent.is_dir():

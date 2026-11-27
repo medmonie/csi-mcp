@@ -12,7 +12,7 @@ import edition
 import programs
 from actions import ACTIONS, Action
 
-SERVER_VERSION = "0.22.0"
+SERVER_VERSION = "0.22.2"
 
 UNITS_NOTE = (
     "UNITS: every action that reads or writes numbers takes params.units (default kN_m_C = kN, m, C; also Ton_m_C, "
@@ -70,9 +70,20 @@ def render(text: str) -> str:
     one = edition.current()
 
     def sub(m: re.Match) -> str:
+        src = m.string
+        before = src[m.start() - 1] if m.start() else " "
+        after = src[m.end()] if m.end() < len(src) else " "
         if one:
-            return m.group(2) if LETTER[one] in m.group(1) else ""
-        return f"{m.group(2)} [{', '.join(programs.expand(m.group(1)))}]"
+            kept = m.group(2) if LETTER[one] in m.group(1) else ""
+        else:
+            kept = f"{m.group(2)} [{', '.join(programs.expand(m.group(1)))}]"
+        if not kept:     # a dropped piece between two words leaves one space ("blank[[EF: or grid-only]] model")
+            return " " if (before.isalnum() or before in ".)") and after.isalnum() else ""
+        if (before.isalnum() or before in ".)") and kept[0].isalnum():
+            kept = " " + kept    # "read back.[[E:ETABS takes ...]]" -> "read back. ETABS takes ..."
+        if after.isalnum() and (kept[-1].isalnum() or kept[-1] in ".)"):
+            kept += " "
+        return kept
     return re.sub(r"  +", " ", _MARK.sub(sub, text or ""))
 
 
@@ -124,8 +135,8 @@ def param_help(a: Action) -> dict[str, Any]:
     for name in _fields(a):
         field = a.params.model_fields[name]
         entry: dict[str, Any] = {"required": field.is_required(), "description": render(field.description or "")}
-        if not field.is_required():
-            entry["default"] = field.default
+        if not field.is_required():     # a default_factory field has no plain default (PydanticUndefined)
+            entry["default"] = field.get_default(call_default_factory=True)
         prop = schema.get("properties", {}).get(name, {})
         enum = prop.get("enum") or next((x.get("enum") for x in prop.get("anyOf", []) if "enum" in x), None)
         if not enum:
@@ -169,7 +180,7 @@ def tool_description(mode: str = "all") -> str:
     out.append(SAFETY_NOTE)
     if mode in ("all", "read"):
         out.append("\nREAD ACTIONS (never change the model; Output actions write files only)")
-        out.append("- help(topic?): parameter details of an action, or the whole catalogue.")
+        out.append("- help(topic?): parameter details of an action; without topic the list of actions.")
         out += _listing("read")
     if mode in ("all", "edit"):
         out.append("\nEDIT ACTIONS (change the model, its files or the program)")
@@ -177,6 +188,16 @@ def tool_description(mode: str = "all") -> str:
     out.append("\nTables: find exact keys with list_available_tables before query_database_table; keep max_rows small "
                "and prefer get_analysis_summary for headline results.")
     return "\n".join(out)
+
+
+def help_index() -> dict[str, Any]:
+    """`help` without a topic: the actions and what each does. The parameter details of all of them together are
+    about 200 000 characters, so they are given per action (topic) or only when asked for (topic 'all')."""
+    return {"version": SERVER_VERSION, "server": edition.server_name(), "programs": list(programs.enabled()),
+            "readActions": {a.name: render(a.summary) for a in _actions("read")},
+            "editActions": {a.name: render(a.summary) for a in _actions("edit")},
+            "hint": "params.topic = an action name returns its parameters (description, default, allowed values). "
+                    "topic 'all' returns every action's parameters at once (very large; avoid it)."}
 
 
 def help_data(topic: str | None = None) -> dict[str, Any]:

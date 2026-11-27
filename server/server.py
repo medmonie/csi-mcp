@@ -14,12 +14,16 @@ allowing changes to models.
 from __future__ import annotations
 
 import argparse
-import contextlib
+import asyncio
 import atexit
+import contextlib
 import json
 import logging
 import os
 import sys
+import time
+from concurrent.futures import Future
+from dataclasses import dataclass
 from typing import Any
 
 # Reserve the original pipe before importing SDKs or native COM libraries. This
@@ -31,7 +35,7 @@ if __name__ == "__main__" and not {"--configure-clients", "--remove-clients", "-
 
 import anyio
 from mcp.server.fastmcp import Context, FastMCP
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from mcp.types import CallToolRequest, CallToolResult, ListToolsRequest, PingRequest, TextContent, ToolAnnotations
 from pydantic import ValidationError
 
 import catalog
@@ -44,7 +48,8 @@ from stdio_transport import serve
 from windows_lock import exclusive
 import safety
 
-logging.basicConfig(level=os.environ.get("CSI_MCP_LOG", "INFO"), stream=sys.stderr,
+_level = os.environ.get("CSI_MCP_LOG", "INFO").strip().upper()
+logging.basicConfig(level=_level if isinstance(logging.getLevelName(_level), int) else "INFO", stream=sys.stderr,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("csi_mcp.server")
 
@@ -53,8 +58,61 @@ executor = ComExecutor()
 atexit.register(lambda: executor.shutdown(bridge.release_all))
 
 
+@dataclass
+class Call:
+    """A CSI call waiting for, or running on, the COM thread."""
+    action: str
+    started: float
+    future: Future
+
+
+CALLS: dict[Any, Call] = {}       # MCP request id -> its call (event-loop thread only)
+ABANDONED: list[Call] = []        # at most one: a call the client cancelled while CSI was already working on it
+
+
+def may_cancel(request_id: Any) -> bool:
+    """notifications/cancelled: withdraw a call that has not started; a call CSI is working on cannot be stopped.
+
+    Without this the SDK answers "Request cancelled" while the edit still completes in the program, and a retry
+    then repeats it. An ignored cancellation is remembered, so later calls say what happened (run_action).
+    """
+    call = CALLS.get(request_id)
+    if call is None or call.future.cancel():
+        return True
+    if not call.future.done():
+        ABANDONED[:] = [call]
+        log.warning("Cancellation of '%s' ignored: the CSI call is already running and cannot be stopped.", call.action)
+    return False
+
+
+def _earlier_call() -> tuple[CallToolResult | None, dict[str, Any] | None]:
+    """(refusal while a cancelled call still runs, or a note on how it ended for the first call after it)."""
+    if not ABANDONED:
+        return None, None
+    call = ABANDONED[0]
+    seconds = round(time.time() - call.started)
+    if not call.future.done():
+        return _error({"error_type": "Busy", "message": (
+            f"The earlier '{call.action}' call (started {seconds} s ago) was cancelled or timed out on the client, "
+            "but a CSI call cannot be stopped: the program is still working on it. This call did not start."),
+            "hint": "If the program shows a dialog, close it. When it has finished, check the model before "
+                    "repeating an edit: the earlier call may have completed."}), None
+    ABANDONED.clear()
+    failure = call.future.exception()
+    return None, {"action": call.action, "started_seconds_ago": seconds,
+                  "outcome": "finished" if failure is None else f"failed: {failure}",
+                  "note": "This call was cancelled or timed out on the client while CSI was working on it; it was "
+                          "not stopped. Check the model before repeating that action."}
+
+
 class CsiServer(FastMCP):
-    """Refuse unknown top-level arguments instead of silently dropping them."""
+    """Tools only; refuse unknown top-level arguments instead of silently dropping them."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        handlers = self._mcp_server.request_handlers      # FastMCP also registers empty prompts and resources:
+        for request in [r for r in handlers if r not in (PingRequest, ListToolsRequest, CallToolRequest)]:
+            del handlers[request]                         # do not advertise capabilities this server does not have
 
     async def list_tools(self):
         tools = await super().list_tools()
@@ -74,7 +132,7 @@ class CsiServer(FastMCP):
 
     async def run_stdio_async(self):
         await serve(self._mcp_server, {t.name for t in await self.list_tools()},
-                    sys.stdin.buffer, _wire or sys.stdout.buffer)
+                    sys.stdin.buffer, _wire or sys.stdout.buffer, may_cancel)
 
 
 # --------------------------------------------------------------------------- dispatch (runs on the COM thread)
@@ -85,7 +143,8 @@ def dispatch(action: str, params: dict[str, Any] | None, allow_read: bool = True
         raise ValueError('params must be an object, e.g. {"software": "ETABS"}.')
     name = (action or "").strip()
     if name == "help":
-        return catalog.help_data(HelpP.model_validate(params).topic)
+        topic = HelpP.model_validate(params).topic
+        return catalog.help_index() if topic is None else catalog.help_data(None if topic == "all" else topic)
     act = ACTIONS.get(name)
     if act is None:
         raise ValueError(f"Unknown action '{name}'. Actions: help, {', '.join(ACTIONS)}.")
@@ -107,8 +166,11 @@ def dispatch(action: str, params: dict[str, Any] | None, allow_read: bool = True
         catalog.check_program_options(act, validated, software)
     if not catalog.available(act):
         raise ValueError(f"'{name}' is not offered by this server (CSI_MCP_PROGRAMS={','.join(programs.enabled())}).")
-    logged = act.kind == "edit" and not getattr(validated, "dry_run", False)
-    with exclusive(f"model-access-{getattr(validated, 'software', None) or edition.server_name()}"), bridge.action_scope(act.kind == "edit" and name != "connect"):
+    # an edit action in its read mode (edit_database_table mode 'read') changes nothing: not a change-log entry
+    logged = act.kind == "edit" and not getattr(validated, "dry_run", False) and getattr(validated, "mode", "") != "read"
+    # one name per program whatever the action (list_programs has no software): Windows object names are case-sensitive
+    lock = f"model-access-{(software or edition.server_name()).upper()}"
+    with exclusive(lock), bridge.action_scope(act.kind == "edit" and name != "connect"):
         try:
             result = act.run(validated)
         except Exception as exc:
@@ -153,9 +215,16 @@ async def run_action(ctx: Context | None, action: str, params: dict[str, Any] | 
             await anyio.sleep(HEARTBEAT_SECONDS)
             beats += 1
             try:
-                await context.report_progress(beats, None, f"Waiting for {(params or {}).get('software', 'CSI')}")
+                await context.report_progress(beats, None, f"Waiting for {waiting_for}")
             except Exception:  # noqa: BLE001 - progress is best effort
                 return
+
+    software = (params or {}).get("software") if isinstance(params, dict) else None
+    waiting_for = software if isinstance(software, str) else (edition.current() or "CSI")
+    is_help = action.strip() == "help"
+    busy, earlier = (None, None) if is_help else _earlier_call()
+    if busy is not None:
+        return busy
 
     result: Any = None
     error: BaseException | None = None
@@ -163,29 +232,50 @@ async def run_action(ctx: Context | None, action: str, params: dict[str, Any] | 
         if ctx is not None and ctx.request_context.meta and ctx.request_context.meta.progressToken is not None:
             tg.start_soon(heartbeat, ctx)
         try:
-            if action.strip() == "help":
+            if is_help:
                 result = dispatch(action, params, allow_read, allow_edit)
             else:
-                result = await executor.arun(dispatch, action, params, allow_read, allow_edit)
+                result = await _on_com_thread(ctx, action.strip(), params, allow_read, allow_edit)
         except Exception as exc:  # noqa: BLE001 - turned into a tool error below
             error = exc
         finally:
             tg.cancel_scope.cancel()
 
+    def noted(payload: dict[str, Any]) -> dict[str, Any]:
+        return {**payload, "earlier_cancelled_call": earlier} if earlier else payload
+
     if error is None:
-        return result
+        return noted(result) if isinstance(result, dict) else result
     if isinstance(error, ActionFailed):
-        return _error(error.payload)
+        return _error(noted(error.payload))
     if isinstance(error, ValidationError):
-        return _error(_validation_text(action, error))
+        return _error(noted(_validation_text(action, error)))
     if isinstance(error, (CSIError, TableError)):
-        return _error({"error_type": type(error).__name__, "message": str(error), "hint": getattr(error, "hint", "")})
+        return _error(noted({"error_type": type(error).__name__, "message": str(error),
+                             "hint": getattr(error, "hint", "")}))
     if isinstance(error, ValueError):
-        return _error({"error_type": "InvalidRequest", "message": str(error)})
+        return _error(noted({"error_type": "InvalidRequest", "message": str(error)}))
     log.exception("Unexpected error in %s", action, exc_info=error)
-    return _error({"error_type": "UnexpectedError", "message": f"{type(error).__name__}: {error}",
-                   "hint": "If the program shows a dialog, close it. Inspect the model before retrying an edit; "
-                           "details are in the server log (stderr)."})
+    return _error(noted({"error_type": "UnexpectedError", "message": f"{type(error).__name__}: {error}",
+                         "hint": "If the program shows a dialog, close it. Inspect the model before retrying an "
+                                 "edit; details are in the server log (stderr)."}))
+
+
+async def _on_com_thread(ctx: Context | None, action: str, params: dict[str, Any] | None,
+                         allow_read: bool, allow_edit: bool) -> Any:
+    """Queue the action for the COM thread under its MCP request id, so may_cancel can find it."""
+    future = executor.submit(dispatch, action, params, allow_read, allow_edit)
+    key = ctx.request_context.request_id if ctx is not None else object()
+    CALLS[key] = Call(action, time.time(), future)
+    try:
+        return await asyncio.wrap_future(future)
+    except asyncio.CancelledError:
+        if future.cancelled() and ctx is not None:
+            # withdrawn by may_cancel before it started: the SDK cancels this request next and answers the client
+            await anyio.sleep_forever()
+        raise
+    finally:
+        CALLS.pop(key, None)
 
 
 # --------------------------------------------------------------------------- tools

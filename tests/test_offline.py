@@ -1850,3 +1850,133 @@ def test_022_section_designer_sap_only():
     e = call("define_section_designer_section", {"software": "SAFE", "name": "SD1", "material": "C30",
                                                  "design_type": "no_design", "shapes": shapes})
     assert e["_error"]
+
+
+# --------------------------------------------------------------------------- 0.22.1 audit fixes
+
+def test_0221_help_without_topic_is_an_index():
+    index = call("help")
+    assert set(index["readActions"]) >= {"get_model_status"} and "connect" in index["editActions"]
+    assert isinstance(index["editActions"]["connect"], str) and len(json.dumps(index)) < 40_000
+    assert "params" in call("help", {"topic": "all"})["readActions"]["get_model_status"]
+    assert "params" in call("help", {"topic": "connect"})["connect"]
+
+
+def test_0221_paths_expand_folder_variables_only(monkeypatch, tmp_path):
+    from csi_bridge import user_path
+    monkeypatch.setenv("CONTROL_PLANE_API_KEY", "sk-secret")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    for text in ("%CONTROL_PLANE_API_KEY%.sdb", "$CONTROL_PLANE_API_KEY.sdb", "${CONTROL_PLANE_API_KEY}.sdb"):
+        assert "sk-secret" not in user_path(text)
+    assert user_path(os.path.join("%USERPROFILE%", "m.sdb")) == str(tmp_path / "m.sdb")
+    assert user_path(str(tmp_path / "model.$et")).endswith("model.$et")          # ETABS working copy name
+    fresh("SAP2000")
+    r = call("open_or_save_model", {"software": "SAP2000", "action": "open", "dry_run": True,
+                                    "file_path": "${CONTROL_PLANE_API_KEY}.sdb"})
+    assert "sk-secret" not in json.dumps(r)
+    r = call("export_report", {"software": "SAP2000", "output_path": "$CONTROL_PLANE_API_KEY/r.pdf"})
+    assert r["_error"] and "sk-secret" not in json.dumps(r)
+
+
+def test_0221_oversized_frame_answers_with_the_request_id():
+    import io
+    import stdio_transport as st
+    big = b'"x":"' + b"a" * (st.MAX_FRAME + 10) + b'"'
+    python_order = b'{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{' + big + b'}}\n'
+    ts_order = b'{"method":"tools/call","params":{' + big + b'},"jsonrpc":"2.0","id":"r-7"}\n'
+    nested_only = b'{"jsonrpc":"2.0","method":"notifications/x","params":{' + big + b',"id":5}}\n'
+    stream = io.BytesIO(python_order + ts_order + nested_only + b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n' + b'{"cut')
+    got = [st._read_frame(stream) for _ in range(6)]
+    assert [type(g) for g in got[:3]] == [st.Oversized] * 3
+    assert [g.rid for g in got[:3]] == [41, "r-7", None]        # an id inside params is never taken for the request's
+    assert json.loads(got[3])["method"] == "ping" and got[4] is None and got[5] == b""
+
+
+def test_0221_tools_only_capabilities():
+    from mcp.server.lowlevel import NotificationOptions
+    caps = server.create_server()._mcp_server.get_capabilities(NotificationOptions(), {})
+    assert caps.tools is not None and caps.prompts is None and caps.resources is None
+
+
+def test_0221_cancelled_running_call_is_not_reported_cancelled():
+    import threading
+    from types import SimpleNamespace
+    from actions import Action, NoParams
+    started, release, ran = threading.Event(), threading.Event(), []
+
+    def slow(_):
+        started.set()
+        release.wait(10)
+        ran.append("slow")
+        return {"done": True}
+
+    def quick(_):
+        ran.append("quick")
+        return {"quick": True}
+
+    ACTIONS["_slow"] = Action("_slow", "", "Session", "edit", NoParams, slow)
+    ACTIONS["_quick"] = Action("_quick", "", "Session", "edit", NoParams, quick)
+    ctx = lambda rid: SimpleNamespace(request_context=SimpleNamespace(request_id=rid, meta=None))  # noqa: E731
+
+    async def scenario():
+        first = asyncio.ensure_future(server.run_action(ctx(1), "_slow", {}, True, True))
+        await asyncio.to_thread(started.wait, 10)
+        queued = asyncio.ensure_future(server.run_action(ctx(2), "_quick", {}, True, True))
+        await asyncio.sleep(0.05)
+        assert server.may_cancel(2) is True          # not started yet: withdrawn, the SDK reports it cancelled
+        assert server.may_cancel(1) is False         # CSI is working on it: the cancellation is ignored
+        assert server.may_cancel(99) is True         # unknown ids are the SDK's business
+        busy = await server.run_action(ctx(3), "_quick", {}, True, True)
+        assert busy.isError and busy.structuredContent["error_type"] == "Busy"
+        release.set()
+        assert await first == {"done": True}         # the real outcome, not "Request cancelled"
+        queued.cancel()
+        after = await server.run_action(ctx(4), "_quick", {}, True, True)
+        assert after["quick"] and after["earlier_cancelled_call"]["action"] == "_slow"
+        assert after["earlier_cancelled_call"]["outcome"] == "finished"
+        assert "earlier_cancelled_call" not in await server.run_action(ctx(5), "_quick", {}, True, True)
+
+    try:
+        asyncio.run(scenario())
+        assert ran == ["slow", "quick", "quick"]     # the withdrawn call never ran
+    finally:
+        release.set()
+        ACTIONS.pop("_slow"), ACTIONS.pop("_quick")
+        server.ABANDONED.clear()
+
+
+def test_0221_table_read_mode_is_not_a_change_log_entry(tmp_path, monkeypatch):
+    monkeypatch.setenv("CSI_MCP_OUTPUT", str(tmp_path))
+    import safety
+    fresh("ETABS")
+    r = call("edit_database_table", {"software": "ETABS", "table_key": "Load Pattern Definitions"})
+    assert "_error" not in r, r
+    assert not (tmp_path / "change_log.jsonl").exists()
+    safety.log_change({"action": "x", "params": {"rows": ["r" * 50] * 5000}, "outcome": "ok"})
+    line = (tmp_path / "change_log.jsonl").read_text(encoding="utf-8")
+    assert len(line) < safety.MAX_LOG_LINE and json.loads(line)["params"]["shortened"] is True
+
+
+def test_0222_render_spacing_and_help_defaults(monkeypatch):
+    import json
+
+    import catalog
+    cases = {"ETABS": [("a new blank[[EF: or grid-only]] model", "a new blank or grid-only model"),
+                       ("read back.[[E:ETABS takes]] x", "read back. ETABS takes x"),
+                       ("read back[[E:and the widths]]", "read back and the widths"),
+                       ("its name[[EF:with its label]].", "its name with its label."),
+                       ("multiplier)[[S:or joint patterns]].", "multiplier)."),
+                       ("sections[[S:, joints]].", "sections.")],
+             "SAP2000": [("a new blank[[EF: or grid-only]] model", "a new blank model"),
+                         ("multiplier)[[S:or joint patterns]].", "multiplier) or joint patterns."),
+                         ("the [[S:solid]][[E:concrete]] shapes", "the solid shapes")]}
+    for prog, pairs in cases.items():
+        monkeypatch.setenv("CSI_MCP_PROGRAM", prog)
+        for src, want in pairs:
+            assert catalog.render(src) == want, (prog, src, catalog.render(src))
+        for a in catalog._actions(None):          # every help topic is plain JSON (no PydanticUndefined)
+            text = json.dumps(catalog.help_data(a.name))
+            assert "PydanticUndefined" not in text, a.name
+        assert "Answers with" not in catalog.render(ACTIONS["create_frames"].summary).split("Answers with", 1)[1]
+    monkeypatch.setenv("CSI_MCP_PROGRAM", "SAP2000")
+    assert catalog.param_help(ACTIONS["define_lane"])["values"]["default"] == {}

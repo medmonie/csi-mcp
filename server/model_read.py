@@ -744,7 +744,8 @@ def read_load_patterns(sap: Any, names: list[str] | None) -> list[dict[str, Any]
 
 
 @action("get_definition_details", "Full definitions of one kind: materials (type, E, Poisson, G, weight, mass), "
-        "frame sections (type, dimensions, area, material, section file), area sections (shell / slab / wall / deck, "
+        "frame sections (type, dimensions, area, material, section file, concrete reinforcement, non-prismatic "
+        "segments, Section Designer shapes with their section properties), area sections (shell / slab / wall / deck, "
         "material, thickness, modifiers), [[EF: springs (point / area stiffnesses), ]]load patterns (type, self-weight "
         "multiplier)[[S: or joint patterns (joints with a value)]].",
         "Model reading", "read", DefinitionsDetailP, options={"kind": {"springs": "EF", "joint_patterns": "S"}})

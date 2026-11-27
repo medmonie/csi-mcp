@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.22.2 - 2026-11-28
+
+Findings of the live capability check of the installed 0.22.1 (project note csi-mcp-live-check-0.22.1.md). Text and
+help fixes; no new actions, no change to what any action does; offline tests 100 -> 101.
+- Fix: words ran together where a program-specific piece of text was glued to the word before or after it ("blankor"
+  in new_model, "read backand" in set_auto_wind, "multiplier)or" in get_definition_details, "namewith" in
+  create_frame_element, "read back.ETABS" in define_section_designer_section). The edition text is now assembled
+  with a space wherever a kept or dropped piece meets a word, for every action at once.
+- create_frames no longer says "Answers with" twice in ETABS / SAFE.
+- define_section_designer_section: the description no longer says "in SAP2000" in the ETABS edition, lists the
+  shapes each program takes, and gives the axes as measured in 0.22.0: x horizontal along local 3, y vertical along
+  local 2 (I33 about the horizontal axis). 0.22.0 had them the other way round in the text (the code and the tests
+  were right).
+- get_definition_details: the summary names what frame sections show since 0.21 / 0.22 (concrete reinforcement,
+  non-prismatic segments, Section Designer shapes and section properties).
+- Fix: `help` for define_lane and assign_frame_hinges (SAP2000) showed the default of `values` as
+  "PydanticUndefined"; fields with a computed default now show it ({}).
+- Checked, not changed: SAP2000 has no define_spring_property because its API has no named spring properties
+  (PropPointSpring / PropLineSpring / PropAreaSpring exist in ETABS and SAFE only - docs/api/methods.csv); springs are
+  assigned directly to joints and frames.
+
+## 0.22.1 - 2026-11-27
+
+Audit of 0.22.0 (protocol, transport, threading, paths). 7 fixes, no new actions; offline tests 93 -> 99.
+- Fix: cancelling a call that CSI is already working on. The MCP SDK answered "Request cancelled" at once while the
+  edit still completed in the program, so a retry repeated it (a duplicate frame, a second import). A CSI call
+  cannot be stopped, so the cancellation of a running call is now ignored (as the MCP specification allows) and the
+  call answers with its real outcome; a call still waiting in the queue is withdrawn and never runs. While a
+  cancelled call is still running, new calls are refused with `Busy` (they used to queue silently behind it), and
+  the first call after it finished carries `earlier_cancelled_call` with how it ended.
+- Fix: path parameters no longer expand every environment variable. `%NAME%` / `$NAME` in file_path / output_path
+  was expanded and echoed in the answer or the error ("Model file not found: ..."), which let a prompt read any
+  variable of the server process - for the ChatGPT tunnel that includes CONTROL_PLANE_API_KEY. Only folder
+  variables are expanded now (USERPROFILE, APPDATA, LOCALAPPDATA, TEMP, OneDrive ...; csi_bridge.user_path); other
+  names stay as typed.
+- Fix: a request over the frame limit was answered with id null, so the client waited for its own id until it timed
+  out. The limit was 1 MiB although edit_database_table allows 20 000 rows (1.2 MB): it is 8 MiB now, and a larger
+  frame is answered with the request's own id (read from the start or the end of the frame, never from params).
+- Fix: `help` without a topic returned the parameters of every action (about 195 000 characters in one answer). It
+  now lists the actions with their summaries (about 23 000); `topic` = an action gives its parameters, `topic`
+  'all' the whole catalogue.
+- Fix: the server advertised the prompts and resources capabilities (FastMCP registers both, empty). It is a
+  tools-only server and says so now; prompts/list and resources/list answer "Method not found".
+- Fix: change log. edit_database_table in its read mode was logged as an edit, with the rows it returned; an entry
+  is now at most 64 000 characters (large params / outcome are shortened, the entry is kept).
+- Fix: small ones. Shutdown waited twice (2 x 30 s) for a running CSI call; the per-program lock had another name
+  for list_programs ("sap2000" / "SAP2000": Windows object names are case-sensitive); an unknown CSI_MCP_LOG value
+  stopped the server at start; the progress message said "CSI" instead of the program.
+
 ## 0.22.0 - 2026-11-27
 
 Roadmap 8.4 (Section Designer and non-prismatic sections), staged construction in ETABS, and the ETABS design

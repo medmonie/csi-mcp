@@ -2,24 +2,43 @@
 from __future__ import annotations
 
 import json
+import re
 import time
-from typing import BinaryIO
+from typing import BinaryIO, Callable
 
 import anyio
 from mcp import types
 from mcp.shared.message import SessionMessage
 from pydantic import ValidationError
 
-MAX_FRAME = 1 << 20
+MAX_FRAME = 8 << 20     # the largest request the action schemas allow (20 000 table rows) is a few MiB
 MAX_RESPONSE = 8 << 20
+_ID = rb'(-?\d{1,18}|"[^"\\]{0,128}")'
+# the id is read only where it cannot belong to a nested object: before params at the very start of the frame
+# (Python SDK order) or as the last member before the closing brace (TypeScript SDK order: method, params, jsonrpc, id)
+_HEAD_ID = re.compile(rb'^\s*\{(?:\s*"(?:jsonrpc|method)"\s*:\s*"[^"\\]{0,80}"\s*,)*\s*"id"\s*:\s*' + _ID + rb'\s*[,}]')
+_TAIL_ID = re.compile(rb'[\]}"\d]\s*,\s*(?:"jsonrpc"\s*:\s*"2\.0"\s*,\s*)?"id"\s*:\s*' + _ID + rb'\s*\}\s*$')
 
 
-def _read_frame(stream: BinaryIO) -> bytes | None:
+class Oversized:
+    """A frame that was dropped; `rid` is its request id when it could be read without parsing the frame."""
+
+    def __init__(self, head: bytes, tail: bytes) -> None:
+        found = _HEAD_ID.match(head) or _TAIL_ID.search(tail)
+        self.rid = json.loads(found.group(1)) if found else None
+
+
+def _read_frame(stream: BinaryIO) -> bytes | Oversized | None:
+    """One line. b"" = end of input; None = a last line cut off by the end of input; Oversized = dropped."""
     line = stream.readline(MAX_FRAME + 1)
-    if line and (len(line) > MAX_FRAME or not line.endswith(b"\n")):
+    if line and not line.endswith(b"\n"):
+        if len(line) <= MAX_FRAME:
+            return None
+        head = tail = line[:512]
         while line and not line.endswith(b"\n"):
+            tail = (tail + line)[-512:]
             line = stream.readline(MAX_FRAME + 1)
-        return None
+        return Oversized(head, (tail + line)[-512:])
     return line
 
 
@@ -27,8 +46,15 @@ def _invalid_constant(value: str):
     raise ValueError("non-finite JSON number")
 
 
-async def serve(server, tool_names: set[str], stdin: BinaryIO, stdout: BinaryIO) -> None:
-    """The SDK owns negotiation, tools, progress, cancellation and result serialization."""
+async def serve(server, tool_names: set[str], stdin: BinaryIO, stdout: BinaryIO,
+                may_cancel: Callable[[object], bool] | None = None) -> None:
+    """The SDK owns negotiation, tools, progress and result serialization.
+
+    Cancellation: the SDK answers a cancelled request with "Request cancelled" at once, whatever the handler is
+    doing. A CSI call that already runs on the COM thread cannot be stopped, so `may_cancel(request_id)` decides:
+    True = forward the notification (the call had not started and is withdrawn), False = ignore it, as the MCP
+    specification allows for a request that cannot be cancelled; the call then answers with its real outcome.
+    """
     source, incoming = anyio.create_memory_object_stream(0)
     outgoing, sink = anyio.create_memory_object_stream(0)
     methods = {model.model_fields["method"].default for model in server.request_handlers} | {"initialize"}
@@ -54,8 +80,12 @@ async def serve(server, tool_names: set[str], stdin: BinaryIO, stdout: BinaryIO)
                 line = await anyio.to_thread.run_sync(_read_frame, stdin)
                 if line == b"":
                     return
+                if isinstance(line, Oversized):
+                    # answer with the request's own id when it could be read, so the client is not left waiting
+                    await error(line.rid, -32600, f"MCP frame over {MAX_FRAME >> 20} MiB. This request did not start.")
+                    continue
                 if line is None:
-                    await error(None, -32600, "Incomplete or oversized MCP frame")
+                    await error(None, -32600, "Incomplete MCP frame")
                     continue
                 try:
                     msg = json.loads(line.decode("utf-8"), parse_constant=_invalid_constant)
@@ -96,6 +126,9 @@ async def serve(server, tool_names: set[str], stdin: BinaryIO, stdout: BinaryIO)
                     if method == "notifications/initialized" and state == "negotiated":
                         state = "ready"
                     elif state != "ready" or method == "notifications/initialized":
+                        continue
+                    elif (method == "notifications/cancelled" and may_cancel is not None
+                          and not may_cancel(msg.get("params", {}).get("requestId"))):
                         continue
                 else:
                     if len(pending) >= 64:

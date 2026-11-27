@@ -150,8 +150,8 @@ def _etabs_base_free(sap: Any, software: str, points: list[str]) -> list[str]:
     return free
 
 
-@action("create_frames", "Add frames between points (point names or coordinates) with one section[[EF:; answers "
-        "with labels and stories]]. Answers with the frame names and their end points.", "Objects", "edit", FramesP)
+@action("create_frames", "Add frames between points (point names or coordinates) with one section. Answers with the "
+        "frame names and their end points[[EF:, labels and stories]].", "Objects", "edit", FramesP)
 def create_frames(p: FramesP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
     secs = bridge.try_name_list(sap, ["PropFrame"])[0] or []

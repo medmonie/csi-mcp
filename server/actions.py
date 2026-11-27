@@ -37,6 +37,7 @@ from csi_bridge import (
     api_call,
     as_list,
     describe_units,
+    user_path,
 )
 import programs
 import safety
@@ -90,7 +91,8 @@ class NoParams(Params):
 
 
 class HelpP(Params):
-    topic: str | None = Field(default=None, description="an action name for its full parameter list")
+    topic: str | None = Field(default=None, max_length=80, description=(
+        "an action name for its full parameter list; omitted = the list of actions; 'all' = everything (very large)"))
 
 
 class SoftwareP(Params):
@@ -446,7 +448,7 @@ def open_or_save_model(p: OpenSaveP) -> dict[str, Any]:
     if p.dry_run:
         ext = SPECS[p.software].model_extensions
         if p.action == "open":
-            path = os.path.abspath(os.path.expandvars(os.path.expanduser(p.file_path or "")))
+            path = user_path(p.file_path or "")
             problems = ([] if os.path.isfile(path) else ["file not found"]) + \
                        ([] if os.path.splitext(path)[1].lower() in ext else [f"{p.software} opens {', '.join(ext)}"])
             return _dry({"open": path, "current_model_closed": True}, problems=problems)

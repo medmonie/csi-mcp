@@ -22,6 +22,8 @@ from typing import Any
 
 log = logging.getLogger("csi_mcp.safety")
 
+MAX_LOG_LINE = 64_000    # characters of one change_log.jsonl line
+
 
 def output_root() -> Path:
     root = Path(os.environ.get("CSI_MCP_OUTPUT") or (Path.home() / "Documents" / "CsiMcp"))
@@ -110,8 +112,15 @@ def log_change(entry: dict[str, Any]) -> None:
     """Append one JSON line to the change log; never raises (logging must not break an edit)."""
     try:
         line = {"time": dt.datetime.now().isoformat(timespec="seconds"), **entry}
+        text = json.dumps(line, ensure_ascii=False, default=str)
+        if len(text) > MAX_LOG_LINE:      # e.g. 20 000 table rows: keep the entry, shorten its two big parts
+            for part in ("params", "outcome"):
+                as_text = json.dumps(line.get(part), ensure_ascii=False, default=str)
+                if len(as_text) > MAX_LOG_LINE // 4:
+                    line[part] = {"shortened": True, "characters": len(as_text), "start": as_text[:MAX_LOG_LINE // 4]}
+            text = json.dumps(line, ensure_ascii=False, default=str)
         with (output_root() / "change_log.jsonl").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
+            fh.write(text + "\n")
     except Exception as exc:  # noqa: BLE001
         log.warning("change log not written: %s", exc)
 
