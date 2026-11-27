@@ -1,0 +1,22 @@
+{PROGRAM} MCP {VERSION} - quick install
+
+This package connects Claude to CSI {PROGRAM} only. ETABS, SAP2000 and SAFE each have their own package
+(EtabsMcp.zip, Sap2000Mcp.zip, SafeMcp.zip); install the ones you use.
+
+Needed on this PC: {PROGRAM} (licensed; {MIN} or later, with the v1 Open API) and an MCP client (Claude Desktop or
+Codex). Nothing else: the package includes the server as one exe.
+
+1. Quit Claude Desktop completely (tray icon > Quit). install.bat stops while it is open.
+2. Unzip {PACKAGE}.zip and double-click install.bat as yourself (no "Run as administrator"). It
+   - installs the server: %LOCALAPPDATA%\CsiMcp\{NAME}\{EXE},
+   - adds "{NAME}" to Claude Desktop (claude_desktop_config.json) and Codex (~/.codex/config.toml), keeping your other
+     servers (civil3d, revit ...); the old file is saved next to it as .bak-<date>,
+   - removes the old combined "csi" server (0.6.0 and earlier), which the program servers replace.
+3. Start Claude Desktop again. The tool is called "{NAME}".
+4. Open {PROGRAM} with a model and ask: "Check the {PROGRAM} model status."
+
+If {PROGRAM} is open but cannot be reached: run {PROGRAM} and Claude Desktop at the same privilege level (both normal),
+and register the API once by running {REGISTER} as administrator from the {PROGRAM} install folder.
+
+Actions and parameters of this server: ACTIONS.md. Updating: quit Claude Desktop, run the new install.bat, start
+Claude again. Uninstall: run uninstall.bat. Log of the last install: install_result.txt next to install.bat.

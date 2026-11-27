@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Packaging output
+dist/
+build/
+*.spec
+*.zip
+
+# Local logs and test results
+package_build.txt
+install_result.txt
+setup_result.txt
+publish_result.txt
+publish_log.txt
+tools/commit_message.txt
+tests/results/
+
+# Machine-specific client configs (written by setup_server.bat / tools/write_client_configs.py)
+claude_config_snippet.json
+codex_config_snippet.toml
+
+# Reference models built by tests/live_phase0.py (binary, rebuilt on demand)
+tests/reference_models/
+
+# CSI's own verification examples (models, PDFs, spreadsheets): CSI's material, used locally by the
+# verification tests only - never packaged or published
+CSI Solved Examples/
+tests/verify/expected_v1.py
+Claude outputs/

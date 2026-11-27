@@ -1,0 +1,981 @@
+{
+ "ETABS": {
+  "started_via": "cHelper.CreateObjectProgID('CSI.ETABS.API.ETABSObject')",
+  "sapmodel": {
+   "Analyze": {
+    "ok": true,
+    "interface": "cAnalyze"
+   },
+   "AreaElm": {
+    "ok": true,
+    "interface": "cAreaElm"
+   },
+   "AreaObj": {
+    "ok": true,
+    "interface": "cAreaObj"
+   },
+   "ConstraintDef": {
+    "ok": true,
+    "interface": "cConstraint"
+   },
+   "DatabaseTables": {
+    "ok": true,
+    "interface": "cDatabaseTables"
+   },
+   "DesignCompositeBeam": {
+    "ok": true,
+    "interface": "cDesignCompositeBeam"
+   },
+   "DesignCompositeColumn": {
+    "ok": true,
+    "interface": "cDesignCompositeColumn",
+    "children": {
+     "AISC360_22": true,
+     "CSAS16_19": true,
+     "CSAS16_24": true,
+     "Eurocode_4_2004": true,
+     "IS11384_2022": true,
+     "KDS143100_2022": true
+    }
+   },
+   "DesignConcrete": {
+    "ok": true,
+    "interface": "cDesignConcrete",
+    "children": {
+     "ACI318_08_IBC2009": true,
+     "ACI318_14": true,
+     "ACI318_19": true,
+     "ACI318_25": true,
+     "AS_3600_09": true,
+     "AS_3600_2018": true,
+     "BS8110_97": true,
+     "Chinese_2010": true,
+     "Eurocode_2_2004": true,
+     "Eurocode_2_2023": true,
+     "Indian_IS_456_2000": true,
+     "Mexican_RCDF_2017": true,
+     "SP63_13330_2012": true,
+     "TCVN_5574_2018": true,
+     "TS_500_2000_R2018": true
+    }
+   },
+   "DesignConcreteShell": {
+    "ok": true,
+    "interface": "cDesignConcreteShell",
+    "children": {
+     "DesignRequest": true,
+     "Eurocode_2_2004": true
+    }
+   },
+   "DesignConcreteSlab": {
+    "ok": true,
+    "interface": "cDesignConcreteSlab",
+    "children": {
+     "ACI318_14": true,
+     "ACI318_19": true,
+     "ACI318_25": true,
+     "DesignStrip": true
+    }
+   },
+   "DesignResults": {
+    "ok": true,
+    "interface": "cDesignResults",
+    "children": {
+     "DesignForces": true
+    }
+   },
+   "DesignShearWall": {
+    "ok": true,
+    "interface": "cDesignShearWall"
+   },
+   "DesignSteel": {
+    "ok": true,
+    "interface": "cDesignSteel",
+    "children": {
+     "AISC360_05_IBC2006": true,
+     "AISC360_10": true,
+     "AISC360_16": true,
+     "AISC360_22": true,
+     "AISC_LRFD93": true,
+     "Australian_AS4100_2020": true,
+     "Australian_AS4100_98": true,
+     "BS5950_2000": true,
+     "Canadian_S16_09": true,
+     "Canadian_S16_14": true,
+     "Canadian_S16_19": true,
+     "Canadian_S16_24": true,
+     "Chinese_2010": true,
+     "Chinese_2018": true,
+     "EN1993_1_1_2005": true,
+     "EN1993_1_1_2022": true,
+     "Eurocode_3_2005": true,
+     "Indian_IS_800_2007": true,
+     "Italian_NTC_2008": true,
+     "Italian_NTC_2018": true,
+     "KDS143100_2022": true,
+     "NewZealand_NZS3404_97": true,
+     "SP16_13330_2011": true
+    }
+   },
+   "Detailing": {
+    "ok": true,
+    "interface": "cDetailing"
+   },
+   "Diaphragm": {
+    "ok": true,
+    "interface": "cDiaphragm"
+   },
+   "EditArea": {
+    "ok": true,
+    "interface": "cEditArea"
+   },
+   "EditFrame": {
+    "ok": true,
+    "interface": "cEditFrame"
+   },
+   "EditGeneral": {
+    "ok": true,
+    "interface": "cEditGeneral"
+   },
+   "EditPoint": {
+    "ok": true,
+    "interface": "cEditPoint"
+   },
+   "File": {
+    "ok": true,
+    "interface": "cFile"
+   },
+   "FrameObj": {
+    "ok": true,
+    "interface": "cFrameObj"
+   },
+   "Func": {
+    "ok": true,
+    "interface": "cFunction",
+    "children": {
+     "FuncRS": true,
+     "FuncTH": true
+    }
+   },
+   "GDispl": {
+    "ok": true,
+    "interface": "cGenDispl"
+   },
+   "GridSys": {
+    "ok": true,
+    "interface": "cGridSys"
+   },
+   "GroupDef": {
+    "ok": true,
+    "interface": "cGroup"
+   },
+   "LineElm": {
+    "ok": true,
+    "interface": "cLineElm"
+   },
+   "LinkElm": {
+    "ok": true,
+    "interface": "cLinkElm"
+   },
+   "LinkObj": {
+    "ok": true,
+    "interface": "cLinkObj"
+   },
+   "LoadCases": {
+    "ok": true,
+    "interface": "cLoadCases",
+    "children": {
+     "Buckling": true,
+     "DirHistLinear": true,
+     "DirHistNonlinear": true,
+     "HyperStatic": true,
+     "ModHistLinear": true,
+     "ModHistNonlinear": true,
+     "ModalEigen": true,
+     "ModalRitz": true,
+     "ResponseSpectrum": true,
+     "StaticLinear": true,
+     "StaticNonlinear": true,
+     "StaticNonlinearStaged": true
+    }
+   },
+   "LoadPatterns": {
+    "ok": true,
+    "interface": "cLoadPatterns",
+    "children": {
+     "AutoSeismic": true,
+     "AutoWind": true
+    }
+   },
+   "Options": {
+    "ok": true,
+    "interface": "cOptions"
+   },
+   "PatternDef": {
+    "ok": true,
+    "interface": "cPattern"
+   },
+   "PierLabel": {
+    "ok": true,
+    "interface": "cPierLabel"
+   },
+   "PointElm": {
+    "ok": true,
+    "interface": "cPointElm"
+   },
+   "PointObj": {
+    "ok": true,
+    "interface": "cPointObj"
+   },
+   "PropArea": {
+    "ok": true,
+    "interface": "cPropArea"
+   },
+   "PropAreaSpring": {
+    "ok": true,
+    "interface": "cPropAreaSpring"
+   },
+   "PropFrame": {
+    "ok": true,
+    "interface": "cPropFrame",
+    "children": {
+     "SDShape": true
+    }
+   },
+   "PropLineSpring": {
+    "ok": true,
+    "interface": "cPropLineSpring"
+   },
+   "PropLink": {
+    "ok": true,
+    "interface": "cPropLink"
+   },
+   "PropMaterial": {
+    "ok": true,
+    "interface": "cPropMaterial",
+    "children": {
+     "TimeDep": true
+    }
+   },
+   "PropPointSpring": {
+    "ok": true,
+    "interface": "cPropPointSpring"
+   },
+   "PropRebar": {
+    "ok": true,
+    "interface": "cPropRebar"
+   },
+   "PropTendon": {
+    "ok": true,
+    "interface": "cPropTendon"
+   },
+   "RespCombo": {
+    "ok": true,
+    "interface": "cCombo"
+   },
+   "Results": {
+    "ok": true,
+    "interface": "cAnalysisResults",
+    "children": {
+     "Setup": true
+    }
+   },
+   "SectCut": {
+    "ok": true,
+    "interface": "cSectionCut"
+   },
+   "SelectObj": {
+    "ok": true,
+    "interface": "cSelect"
+   },
+   "SpandrelLabel": {
+    "ok": true,
+    "interface": "cSpandrelLabel"
+   },
+   "Story": {
+    "ok": true,
+    "interface": "cStory"
+   },
+   "TendonObj": {
+    "ok": true,
+    "interface": "cTendonObj"
+   },
+   "Tower": {
+    "ok": true,
+    "interface": "cTower"
+   },
+   "View": {
+    "ok": true,
+    "interface": "cView"
+   }
+  }
+ },
+ "SAP2000": {
+  "started_via": "cHelper.CreateObjectProgID('CSI.SAP2000.API.SapObject')",
+  "sapmodel": {
+   "Analyze": {
+    "ok": true,
+    "interface": "cAnalyze"
+   },
+   "AreaElm": {
+    "ok": true,
+    "interface": "cAreaElm"
+   },
+   "AreaObj": {
+    "ok": true,
+    "interface": "cAreaObj"
+   },
+   "CableObj": {
+    "ok": true,
+    "interface": "cCableObj"
+   },
+   "ConstraintDef": {
+    "ok": true,
+    "interface": "cConstraint"
+   },
+   "CoordSys": {
+    "ok": true,
+    "interface": "cCoordSys"
+   },
+   "DatabaseTables": {
+    "ok": true,
+    "interface": "cDatabaseTables"
+   },
+   "DesignAluminum": {
+    "ok": true,
+    "interface": "cDesignAluminum",
+    "children": {
+     "AA_2015": true,
+     "AA_2020": true,
+     "AA_ASD_2000": true,
+     "AA_LRFD_2000": true,
+     "Eurocode_9_2007": true
+    }
+   },
+   "DesignColdFormed": {
+    "ok": true,
+    "interface": "cDesignColdFormed",
+    "children": {
+     "AISI_16": true,
+     "AISI_ASD96": true,
+     "AISI_LRFD96": true,
+     "EuroCold06": true
+    }
+   },
+   "DesignConcrete": {
+    "ok": true,
+    "interface": "cDesignConcrete",
+    "children": {
+     "ACI318_08_IBC2009": true,
+     "ACI318_11": true,
+     "ACI318_14": true,
+     "ACI318_19": true,
+     "ACI318_25": true,
+     "ACI350_20": true,
+     "AS_3600_09": true,
+     "BS8110_97": true,
+     "CSA_A23_3_04": true,
+     "CSA_A23_3_14": true,
+     "CSA_A23_3_19": true,
+     "CSA_A23_3_24": true,
+     "Chinese_2002": true,
+     "Chinese_2010": true,
+     "Eurocode_2_2004": true,
+     "Eurocode_2_2023": true,
+     "Hong_Kong_CP_2013": true,
+     "Indian_IS_456_2000": true,
+     "Italian_NTC_2008": true,
+     "KCI_1999": true,
+     "Mexican_RCDF_2004": true,
+     "NZS_3101_2006": true,
+     "SP63_13330_2012": true,
+     "Singapore_CP_65_99": true,
+     "TCVN_5574_2018": true,
+     "TS_500_2000": true
+    }
+   },
+   "DesignConcreteShell": {
+    "ok": true,
+    "interface": "cDesignConcreteShell",
+    "children": {
+     "ACI350_20": true,
+     "DesignRequest": true,
+     "Eurocode_2_2004": true
+    }
+   },
+   "DesignResults": {
+    "ok": true,
+    "interface": "cDesignResults",
+    "children": {
+     "DesignForces": true
+    }
+   },
+   "DesignSteel": {
+    "ok": true,
+    "interface": "cDesignSteel",
+    "children": {
+     "AISC360_05_IBC2006": true,
+     "AISC360_10": true,
+     "AISC360_16": true,
+     "AISC360_22": true,
+     "AISC_ASD89": true,
+     "AISC_LRFD93": true,
+     "API_4F_2020": true,
+     "API_RP2A_LRFD97": true,
+     "API_RP2A_WSD2000": true,
+     "API_RP2A_WSD2014": true,
+     "ASCE_10_97": true,
+     "Australian_AS4100_2020": true,
+     "Australian_AS4100_98": true,
+     "BS5950_2000": true,
+     "Canadian_S16_09": true,
+     "Canadian_S16_14": true,
+     "Canadian_S16_19": true,
+     "Canadian_S16_24": true,
+     "Chinese_2002": true,
+     "Chinese_2010": true,
+     "Chinese_2018": true,
+     "EN1993_1_1_2005": true,
+     "EN1993_1_1_2022": true,
+     "Eurocode_3_2005": true,
+     "Indian_IS_800_2007": true,
+     "Italian_NTC_2008": true,
+     "Italian_NTC_2018": true,
+     "KDS143100_2022": true,
+     "NewZealand_NZS3404_97": true,
+     "Norsok_N0042013": true,
+     "SP16_13330_2011": true
+    }
+   },
+   "EditArea": {
+    "ok": true,
+    "interface": "cEditArea"
+   },
+   "EditFrame": {
+    "ok": true,
+    "interface": "cEditFrame"
+   },
+   "EditGeneral": {
+    "ok": true,
+    "interface": "cEditGeneral"
+   },
+   "EditPoint": {
+    "ok": true,
+    "interface": "cEditPoint"
+   },
+   "EditSolid": {
+    "ok": true,
+    "interface": "cEditSolid"
+   },
+   "ExternalAnalysisResults": {
+    "ok": true,
+    "interface": "cExternalAnalysisResults"
+   },
+   "File": {
+    "ok": true,
+    "interface": "cFile"
+   },
+   "FrameObj": {
+    "ok": true,
+    "interface": "cFrameObj"
+   },
+   "Func": {
+    "ok": true,
+    "interface": "cFunction",
+    "children": {
+     "FuncPSD": true,
+     "FuncRS": true,
+     "FuncSS": true,
+     "FuncTH": true
+    }
+   },
+   "GDispl": {
+    "ok": true,
+    "interface": "cGenDispl"
+   },
+   "GenRefLine": {
+    "ok": true,
+    "interface": "cGenRefLine"
+   },
+   "GroupDef": {
+    "ok": true,
+    "interface": "cGroup"
+   },
+   "LineElm": {
+    "ok": true,
+    "interface": "cLineElm"
+   },
+   "LinkElm": {
+    "ok": true,
+    "interface": "cLinkElm"
+   },
+   "LinkObj": {
+    "ok": true,
+    "interface": "cLinkObj"
+   },
+   "LoadCases": {
+    "ok": true,
+    "interface": "cLoadCases",
+    "children": {
+     "Buckling": true,
+     "DirHistLinear": true,
+     "DirHistNonlinear": true,
+     "ExternalResults": true,
+     "HyperStatic": true,
+     "ModHistLinear": true,
+     "ModHistNonlinear": true,
+     "ModalEigen": true,
+     "ModalRitz": true,
+     "Moving": true,
+     "PSD": true,
+     "ResponseSpectrum": true,
+     "StaticLinear": true,
+     "StaticLinearMultistep": true,
+     "StaticNonlinear": true,
+     "StaticNonlinearMultistep": true,
+     "StaticNonlinearStaged": true,
+     "SteadyState": true
+    }
+   },
+   "LoadPatterns": {
+    "ok": true,
+    "interface": "cLoadPatterns",
+    "children": {
+     "AutoSeastate": true,
+     "AutoSeismic": true,
+     "AutoWind": true
+    }
+   },
+   "NamedAssign": {
+    "ok": true,
+    "interface": "cNamedAssign",
+    "children": {
+     "ModifierArea": true,
+     "ModifierCable": true,
+     "ModifierFrame": true,
+     "ReleaseFrame": true
+    }
+   },
+   "NamedDisplay": {
+    "ok": true,
+    "interface": "cNamedDisplay"
+   },
+   "NamedSet": {
+    "ok": true,
+    "interface": "cNamedSet"
+   },
+   "Options": {
+    "ok": true,
+    "interface": "cOptions"
+   },
+   "PatternDef": {
+    "ok": true,
+    "interface": "cPattern"
+   },
+   "PlaneElm": {
+    "ok": true,
+    "interface": "cPlaneElm"
+   },
+   "PointElm": {
+    "ok": true,
+    "interface": "cPointElm"
+   },
+   "PointObj": {
+    "ok": true,
+    "interface": "cPointObj"
+   },
+   "PropArea": {
+    "ok": true,
+    "interface": "cPropArea"
+   },
+   "PropCable": {
+    "ok": true,
+    "interface": "cPropCable"
+   },
+   "PropFrame": {
+    "ok": true,
+    "interface": "cPropFrame",
+    "children": {
+     "SDShape": true
+    }
+   },
+   "PropLink": {
+    "ok": true,
+    "interface": "cPropLink"
+   },
+   "PropMaterial": {
+    "ok": true,
+    "interface": "cPropMaterial",
+    "children": {
+     "TimeDep": true
+    }
+   },
+   "PropRebar": {
+    "ok": true,
+    "interface": "cPropRebar"
+   },
+   "PropSolid": {
+    "ok": true,
+    "interface": "cPropSolid"
+   },
+   "PropTendon": {
+    "ok": true,
+    "interface": "cPropTendon"
+   },
+   "RespCombo": {
+    "ok": true,
+    "interface": "cCombo"
+   },
+   "Results": {
+    "ok": true,
+    "interface": "cAnalysisResults",
+    "children": {
+     "Setup": true
+    }
+   },
+   "Scheduler": {
+    "ok": true,
+    "interface": "cScheduler"
+   },
+   "SectCut": {
+    "ok": true,
+    "interface": "cSectionCut"
+   },
+   "SelectObj": {
+    "ok": true,
+    "interface": "cSelect"
+   },
+   "SolidElm": {
+    "ok": true,
+    "interface": "cSolidElm"
+   },
+   "SolidObj": {
+    "ok": true,
+    "interface": "cSolidObj"
+   },
+   "SourceMass": {
+    "ok": true,
+    "interface": "cMassSource"
+   },
+   "TendonObj": {
+    "ok": true,
+    "interface": "cTendonObj"
+   },
+   "View": {
+    "ok": true,
+    "interface": "cView"
+   }
+  }
+ },
+ "SAFE": {
+  "started_via": "cHelper.CreateObjectProgID('CSI.SAFE.API.ETABSObject')",
+  "sapmodel": {
+   "Analyze": {
+    "ok": true,
+    "interface": "cAnalyze"
+   },
+   "AreaElm": {
+    "ok": true,
+    "interface": "cAreaElm"
+   },
+   "AreaObj": {
+    "ok": true,
+    "interface": "cAreaObj"
+   },
+   "ConstraintDef": {
+    "ok": true,
+    "interface": "cConstraint"
+   },
+   "DatabaseTables": {
+    "ok": true,
+    "interface": "cDatabaseTables"
+   },
+   "DesignCompositeBeam": {
+    "ok": true,
+    "interface": "cDesignCompositeBeam"
+   },
+   "DesignCompositeColumn": {
+    "ok": true,
+    "interface": "cDesignCompositeColumn",
+    "children": {
+     "AISC360_22": true,
+     "CSAS16_19": true,
+     "CSAS16_24": true,
+     "Eurocode_4_2004": true,
+     "IS11384_2022": true,
+     "KDS143100_2022": true
+    }
+   },
+   "DesignConcrete": {
+    "ok": true,
+    "interface": "cDesignConcrete",
+    "children": {
+     "ACI318_08_IBC2009": true,
+     "ACI318_14": true,
+     "ACI318_19": true,
+     "ACI318_25": true,
+     "AS_3600_09": true,
+     "AS_3600_2018": true,
+     "BS8110_97": true,
+     "Chinese_2010": true,
+     "Eurocode_2_2004": true,
+     "Eurocode_2_2023": true,
+     "Indian_IS_456_2000": true,
+     "Mexican_RCDF_2017": true,
+     "SP63_13330_2012": true,
+     "TCVN_5574_2018": true,
+     "TS_500_2000_R2018": true
+    }
+   },
+   "DesignConcreteShell": {
+    "ok": true,
+    "interface": "cDesignConcreteShell",
+    "children": {
+     "DesignRequest": true,
+     "Eurocode_2_2004": true
+    }
+   },
+   "DesignConcreteSlab": {
+    "ok": true,
+    "interface": "cDesignConcreteSlab",
+    "children": {
+     "ACI318_14": true,
+     "ACI318_19": true,
+     "ACI318_25": true,
+     "DesignStrip": true
+    }
+   },
+   "DesignResults": {
+    "ok": true,
+    "interface": "cDesignResults",
+    "children": {
+     "DesignForces": true
+    }
+   },
+   "DesignShearWall": {
+    "ok": true,
+    "interface": "cDesignShearWall"
+   },
+   "DesignSteel": {
+    "ok": true,
+    "interface": "cDesignSteel",
+    "children": {
+     "AISC360_05_IBC2006": true,
+     "AISC360_10": true,
+     "AISC360_16": true,
+     "AISC360_22": true,
+     "AISC_LRFD93": true,
+     "Australian_AS4100_2020": true,
+     "Australian_AS4100_98": true,
+     "BS5950_2000": true,
+     "Canadian_S16_09": true,
+     "Canadian_S16_14": true,
+     "Canadian_S16_19": true,
+     "Canadian_S16_24": true,
+     "Chinese_2010": true,
+     "Chinese_2018": true,
+     "EN1993_1_1_2005": true,
+     "EN1993_1_1_2022": true,
+     "Eurocode_3_2005": true,
+     "Indian_IS_800_2007": true,
+     "Italian_NTC_2008": true,
+     "Italian_NTC_2018": true,
+     "KDS143100_2022": true,
+     "NewZealand_NZS3404_97": true,
+     "SP16_13330_2011": true
+    }
+   },
+   "Detailing": {
+    "ok": true,
+    "interface": "cDetailing"
+   },
+   "Diaphragm": {
+    "ok": true,
+    "interface": "cDiaphragm"
+   },
+   "EditArea": {
+    "ok": true,
+    "interface": "cEditArea"
+   },
+   "EditFrame": {
+    "ok": true,
+    "interface": "cEditFrame"
+   },
+   "EditGeneral": {
+    "ok": true,
+    "interface": "cEditGeneral"
+   },
+   "EditPoint": {
+    "ok": true,
+    "interface": "cEditPoint"
+   },
+   "File": {
+    "ok": true,
+    "interface": "cFile"
+   },
+   "FrameObj": {
+    "ok": true,
+    "interface": "cFrameObj"
+   },
+   "Func": {
+    "ok": true,
+    "interface": "cFunction",
+    "children": {
+     "FuncRS": true,
+     "FuncTH": true
+    }
+   },
+   "GDispl": {
+    "ok": true,
+    "interface": "cGenDispl"
+   },
+   "GridSys": {
+    "ok": true,
+    "interface": "cGridSys"
+   },
+   "GroupDef": {
+    "ok": true,
+    "interface": "cGroup"
+   },
+   "LineElm": {
+    "ok": true,
+    "interface": "cLineElm"
+   },
+   "LinkElm": {
+    "ok": true,
+    "interface": "cLinkElm"
+   },
+   "LinkObj": {
+    "ok": true,
+    "interface": "cLinkObj"
+   },
+   "LoadCases": {
+    "ok": true,
+    "interface": "cLoadCases",
+    "children": {
+     "Buckling": true,
+     "DirHistLinear": true,
+     "DirHistNonlinear": true,
+     "HyperStatic": true,
+     "ModHistLinear": true,
+     "ModHistNonlinear": true,
+     "ModalEigen": true,
+     "ModalRitz": true,
+     "ResponseSpectrum": true,
+     "StaticLinear": true,
+     "StaticNonlinear": true,
+     "StaticNonlinearStaged": true
+    }
+   },
+   "LoadPatterns": {
+    "ok": true,
+    "interface": "cLoadPatterns",
+    "children": {
+     "AutoSeismic": true,
+     "AutoWind": true
+    }
+   },
+   "Options": {
+    "ok": true,
+    "interface": "cOptions"
+   },
+   "PatternDef": {
+    "ok": true,
+    "interface": "cPattern"
+   },
+   "PierLabel": {
+    "ok": true,
+    "interface": "cPierLabel"
+   },
+   "PointElm": {
+    "ok": true,
+    "interface": "cPointElm"
+   },
+   "PointObj": {
+    "ok": true,
+    "interface": "cPointObj"
+   },
+   "PropArea": {
+    "ok": true,
+    "interface": "cPropArea"
+   },
+   "PropAreaSpring": {
+    "ok": true,
+    "interface": "cPropAreaSpring"
+   },
+   "PropFrame": {
+    "ok": true,
+    "interface": "cPropFrame",
+    "children": {
+     "SDShape": true
+    }
+   },
+   "PropLineSpring": {
+    "ok": true,
+    "interface": "cPropLineSpring"
+   },
+   "PropLink": {
+    "ok": true,
+    "interface": "cPropLink"
+   },
+   "PropMaterial": {
+    "ok": true,
+    "interface": "cPropMaterial",
+    "children": {
+     "TimeDep": true
+    }
+   },
+   "PropPointSpring": {
+    "ok": true,
+    "interface": "cPropPointSpring"
+   },
+   "PropRebar": {
+    "ok": true,
+    "interface": "cPropRebar"
+   },
+   "PropTendon": {
+    "ok": true,
+    "interface": "cPropTendon"
+   },
+   "RespCombo": {
+    "ok": true,
+    "interface": "cCombo"
+   },
+   "Results": {
+    "ok": true,
+    "interface": "cAnalysisResults",
+    "children": {
+     "Setup": true
+    }
+   },
+   "SectCut": {
+    "ok": true,
+    "interface": "cSectionCut"
+   },
+   "SelectObj": {
+    "ok": true,
+    "interface": "cSelect"
+   },
+   "SpandrelLabel": {
+    "ok": true,
+    "interface": "cSpandrelLabel"
+   },
+   "Story": {
+    "ok": true,
+    "interface": "cStory"
+   },
+   "TendonObj": {
+    "ok": true,
+    "interface": "cTendonObj"
+   },
+   "Tower": {
+    "ok": true,
+    "interface": "cTower"
+   },
+   "View": {
+    "ok": true,
+    "interface": "cView"
+   }
+  }
+ }
+}
