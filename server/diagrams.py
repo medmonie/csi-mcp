@@ -582,65 +582,32 @@ def frame_diagram(geo: dict[str, Any], forces: dict[str, list[tuple[float, dict[
     return d, vmax, what
 
 
-# The programs' contour colours, most positive band first (read off SAP2000 27's colour bar: dark blue, blue, light
-# blue, cyan, greens, yellow, orange, reds, purple for the most negative band)
-CSI_BANDS = ["#0000c8", "#0000ff", "#3c78ff", "#00ffff", "#00ff00", "#00c800", "#96f000", "#ffff00", "#ffc800",
-             "#ff9600", "#ff6400", "#ff0000", "#e10000", "#be0028", "#a000a0"]
+# The programs' 15 contour colours, most negative first: sampled from SAP2000 27's and ETABS 23's colour bars, which
+# use the same palette (SAP2000 shows it vertically, most positive at the top; ETABS / SAFE horizontally).
+CSI15 = ["#90008f", "#c0001f", "#f80000", "#f02010", "#f04000", "#f86808", "#f8a808", "#f8f810", "#38f808", "#00f800",
+         "#00f040", "#00f8f8", "#0068f0", "#0020f0", "#0000f0"]
+SAP_STEPS = (1, 1.2, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8)
+ETABS_STEPS = (1, 2, 2.5, 4, 5)
 
 
-def contour_levels(lo: float, hi: float, target: int = 14) -> list[float]:
-    """Band boundaries as the programs label them: multiples of a round step (about (hi - lo) / 14), inside
-    [lo, hi], largest first. SAP2000 showed 14 / 10.5 / ... / -31.5 for M11 from -33.7 to 16.44."""
+def csi_bounds(lo: float, hi: float, style: str = "sap", n: int = 15) -> list[float]:
+    """Band boundaries as the programs make them: n equal bands of a round step starting at the multiple of the
+    step just below the minimum, the smallest step that reaches the maximum. Ascending, n + 1 values. Measured:
+    SAP2000 M11 -33.70 / 16.44 -> -35 ... 17.5 by 3.5; ETABS M11 -31.57 / 16.58 -> -32 ... 28 by 4, ETABS F22
+    -> -220 ... 80 by 20."""
     if hi - lo < 1e-12:
-        return [hi]
-    raw = (hi - lo) / target
-    mag = 10 ** math.floor(math.log10(raw))
-    step = min((m * mag for m in (1, 1.2, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10)), key=lambda x: abs(x - raw))
-    top, bot = math.floor(hi / step + 1e-9), math.ceil(lo / step - 1e-9)
-    return [round(i * step, 10) for i in range(top, bot - 1, -1)]
-
-
-# ETABS / SAFE colour bar, most negative first (read off ETABS 23 and SAFE 23): purple, reds, oranges, yellow just
-# below zero, green just above zero, light greens, cyan, blues; the scale is symmetric about zero
-ETABS_NEG = ["#9600b4", "#c80032", "#ff0000", "#ff4600", "#ff8200", "#ffbe00", "#ffff00"]
-ETABS_POS = ["#00dc00", "#46f000", "#96ff32", "#00ffaa", "#00ffff", "#3c8cff", "#0000ff"]
-
-
-def symmetric_levels(lo: float, hi: float, target: int = 14) -> list[float]:
-    """ETABS / SAFE band boundaries: symmetric about zero, +-A where A is the largest magnitude rounded up to a
-    round step (the smallest of 1, 2, 2.5, 4, 5 x 10^n giving at most 8 bands a side) (ETABS showed -32 ... 32 by 4 for M11 from -31.6 to 16.6; SAFE -350 ... 350 by
-    50). Smallest first."""
-    a = max(abs(lo), abs(hi))
-    if a < 1e-12:
-        return [0.0]
-    half = target // 2 + 1                                 # at most 8 bands each side
-    mag = 10 ** math.floor(math.log10(a / half))
-    step = next(m * mag for m in (1, 2, 2.5, 4, 5, 10, 20) if math.ceil(a / (m * mag) - 1e-9) <= half)
-    n = math.ceil(a / step - 1e-9)
-    return [round(i * step, 10) for i in range(-n, n + 1)]
-
-
-def _etabs_colors(nbands: int) -> list[str]:
-    half = nbands // 2
-
-    def pick(pal: list[str], m: int) -> list[str]:
-        return [pal[round(i * (len(pal) - 1) / max(m - 1, 1))] for i in range(m)] if m else []
-    return pick(ETABS_NEG, half) + pick(ETABS_POS, nbands - half)
-
-
-def _band_colors(n: int) -> list[str]:
-    if n <= len(CSI_BANDS):
-        idx = [round(i * (len(CSI_BANDS) - 1) / max(n - 1, 1)) for i in range(n)]
-        return [CSI_BANDS[i] for i in idx]
-    return [CSI_BANDS[min(int(i * len(CSI_BANDS) / n), len(CSI_BANDS) - 1)] for i in range(n)]
-
-
-def _band_of(val: float, levels: list[float]) -> int:
-    """0 = above the highest boundary ... len(levels) = below the lowest."""
-    for i, b in enumerate(levels):
-        if val > b:
-            return i
-    return len(levels)
+        d = max(abs(hi) * 0.01, 1e-6)
+        lo, hi = lo - d, hi + d
+    raw = (hi - lo) / n
+    steps = SAP_STEPS if style == "sap" else ETABS_STEPS
+    e0 = math.floor(math.log10(raw))
+    for s in sorted(m * 10 ** e for e in (e0 - 1, e0, e0 + 1) for m in steps):
+        start = math.floor(lo / s + 1e-9) * s
+        if start + n * s >= hi - 1e-9 * abs(s):
+            return [round(start + i * s, 10) for i in range(n + 1)]
+    s = 10 ** (e0 + 2)
+    start = math.floor(lo / s) * s
+    return [start + i * s for i in range(n + 1)]
 
 
 def joint_average(elements: list[dict[str, Any]]) -> dict[str, float]:
@@ -650,33 +617,6 @@ def joint_average(elements: list[dict[str, Any]]) -> dict[str, float]:
         for n, val in zip(e["nodes"], e["vals"]):
             acc[n].append(val)
     return {n: sum(v) / len(v) for n, v in acc.items()}
-
-
-def _sub_cells(poly: list[tuple[float, float]], vals: list[float], k: int):
-    """Split a triangle / quad into k x k cells with bilinear (or linear) values at the cell centres."""
-    if len(poly) == 4:
-        def at(u, v):
-            w_ = ((1 - u) * (1 - v), u * (1 - v), u * v, (1 - u) * v)
-            return (sum(wi * p[0] for wi, p in zip(w_, poly)), sum(wi * p[1] for wi, p in zip(w_, poly)),
-                    sum(wi * x for wi, x in zip(w_, vals)))
-        for i in range(k):
-            for j in range(k):
-                c = [at((i + di) / k, (j + dj) / k) for di, dj in ((0, 0), (1, 0), (1, 1), (0, 1))]
-                yield [(p[0], p[1]) for p in c], at((i + 0.5) / k, (j + 0.5) / k)[2]
-    elif len(poly) == 3:
-        def at(a, b):
-            w_ = (1 - a - b, a, b)
-            return (sum(wi * p[0] for wi, p in zip(w_, poly)), sum(wi * p[1] for wi, p in zip(w_, poly)),
-                    sum(wi * x for wi, x in zip(w_, vals)))
-        for i in range(k):
-            for j in range(k - i):
-                tri = [at(i / k, j / k), at((i + 1) / k, j / k), at(i / k, (j + 1) / k)]
-                yield [(p[0], p[1]) for p in tri], sum(p[2] for p in tri) / 3
-                if i + j < k - 1:
-                    tri = [at((i + 1) / k, j / k), at((i + 1) / k, (j + 1) / k), at(i / k, (j + 1) / k)]
-                    yield [(p[0], p[1]) for p in tri], sum(p[2] for p in tri) / 3
-    else:
-        yield poly, sum(vals) / len(vals)
 
 
 def _triangles(poly: list[tuple[float, float]], vals: list[float], k: int):
@@ -744,7 +684,7 @@ def shell_contour(elements: list[dict[str, Any]], comp: str, w: float, h: float,
     'vals': [corner values]}], interpolated over each element and coloured in bands as the program shows it.
     style 'sap' = SAP2000 (values averaged at the joints, bands between round values from max to min, blue = most
     positive ... purple = most negative, vertical bar at the right); 'etabs' = ETABS / SAFE (no averaging, a scale
-    symmetric about zero: purple ... yellow below zero, green ... blue above, horizontal bar at the bottom).
+    horizontal bar at the bottom). Both: 15 bands of a round step from just below the minimum, CSI's colours.
     averaged None = the program's default."""
     from reportlab.graphics.shapes import Polygon, Rect
     if not elements:
@@ -757,50 +697,42 @@ def shell_contour(elements: list[dict[str, Any]], comp: str, w: float, h: float,
         e["use"] = [avg[n] for n in e["nodes"]] if avg else e["vals"]
     vals = [x for e in elements for x in e["use"]]
     lo, hi = min(vals), max(vals)
+    edges = csi_bounds(lo, hi, style)
+    cols = [_c(x) for x in CSI15]
     if etabs:
-        bounds = symmetric_levels(lo, hi)                  # ascending
-        cols = [_c(x) for x in _etabs_colors(max(len(bounds) - 1, 1))]
-
         v = _View([p for e in elements for p in e["poly"]], w - 4, h - 34, margin=16, y0=30)
     else:
-        levels = contour_levels(lo, hi)                   # descending
-        cols = [_c(x) for x in _band_colors(len(levels) + 1)]
         v = _View([p for e in elements for p in e["poly"]], w - 46, h - 4, margin=18)
     d = _drawing(w, h)
     # exact iso-bands: each element in linear triangles, each triangle clipped at the band boundaries, so the band
     # edges run straight and continuous across the elements as in the programs' displays
-    if etabs:
-        edges = bounds
-    else:
-        edges = list(reversed(levels))
-        edges = [min(lo, edges[0]) - 1.0] + edges + [max(hi, edges[-1]) + 1.0]
-    k = 3 if len(elements) < 400 else 2 if len(elements) < 3000 else 1
-    nb = len(cols)
+    k = 4 if len(elements) < 400 else 3 if len(elements) < 3000 else 2
     for e in elements:
         for tri in _triangles(e["poly"], e["use"], k):
             for i, poly in _iso_bands(tri, edges):
-                col = cols[i] if etabs else cols[nb - 1 - i]
+                col = cols[i]
                 d.add(Polygon([c for p in poly for c in v(p[0], p[1])], fillColor=col, strokeColor=col,
                               strokeWidth=0.4))
         if len(elements) <= 800:            # mesh lines; left out on very fine meshes, where they would hide the colours
             d.add(Polygon([c for p in e["poly"] for c in v(*p)], fillColor=None, strokeColor=_c("#3a3a3a"),
                           strokeWidth=0.15))
     n = len(cols)
+    labels = edges[1:-1]                    # the programs label the inner boundaries
     if etabs:
         bw = min(w - 60, 26 * n)
         bx, by = (w - bw) / 2, 10
         for i, col in enumerate(cols):
             d.add(Rect(bx + i * bw / n, by, bw / n, 8, fillColor=col, strokeColor=None))
-        for i, lev in enumerate(bounds):
+        for i, lev in enumerate(labels, start=1):
             _text(d, bx + i * bw / n, by - 6, _fmt(lev), 4.6, DARK)
         _text(d, bx - 14, by + 2, comp, 5.5, DARK)
     else:
         bx, bh = w - 40, min(h - 30, 13 * n)
         by = (h - bh) / 2
-        for i, col in enumerate(cols):
-            d.add(Rect(bx, by + bh - (i + 1) * bh / n, 8, bh / n, fillColor=col, strokeColor=None))
-        for i, lev in enumerate(levels):
-            _text(d, bx + 10, by + bh - (i + 1) * bh / n - 2, _fmt(lev), 4.6, DARK, "start")
+        for i, col in enumerate(cols):                   # most positive at the top
+            d.add(Rect(bx, by + i * bh / n, 8, bh / n, fillColor=col, strokeColor=None))
+        for i, lev in enumerate(labels, start=1):
+            _text(d, bx + 10, by + i * bh / n - 2, _fmt(lev), 4.6, DARK, "start")
         _text(d, bx + 4, by + bh + 5, comp, 5.5, DARK)
     return d, (lo, hi)
 

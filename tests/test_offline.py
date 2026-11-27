@@ -658,7 +658,7 @@ def test_program_filter_and_tags(monkeypatch):
     assert "- set_area_mesh(" in t and "[SAP2000]" in t and "get_stories(software, units?) [ETABS, SAFE]" in t
     monkeypatch.setenv("CSI_MCP_PROGRAMS", "ETABS,SAFE")
     t2 = catalog.tool_description("all")
-    assert "set_area_mesh" not in t2 and "define_joint_pattern" not in t2 and "ETABS | SAFE" in t2 and len(t2) < len(t)
+    assert "define_joint_pattern" not in t2 and "ETABS | SAFE" in t2 and len(t2) < len(t)
     fresh()
     r = call("get_model_status", {"software": "SAP2000"})
     assert r["_error"] and "not enabled" in r["message"]
@@ -691,7 +691,7 @@ def test_area_mesh_auto_and_divide(tmp_path, monkeypatch):
     no = call("set_area_mesh", {"software": "SAP2000", "area_names": ["ZZ"]})
     assert no["_error"] and "ZZ" in no["message"]
     et = call("set_area_mesh", {"software": "ETABS", "area_names": ["A1"]})
-    assert et["_error"] and "not available in ETABS" in et["message"]
+    assert et["_error"] and "mode max_size or none" in et["message"]     # ETABS: tables, max_size / none only
 
 
 def test_hydrostatic_pattern_and_surface_pressure(tmp_path, monkeypatch):
@@ -765,7 +765,7 @@ def test_edition_from_exe_name_and_tools(monkeypatch):
 def test_edition_text_is_program_specific(monkeypatch):
     for prog, present, absent in (
             ("ETABS", ["get_stories", "story_drifts", "pier / spandrel", "with label and story", ".edb"],
-             ["set_area_mesh", "surface_pressure", "joint_patterns", ".sdb", "SAP2000:"]),
+             ["surface_pressure", "joint_patterns", ".sdb", "SAP2000:"]),
             ("SAP2000", ["set_area_mesh", "define_joint_pattern", "surface_pressure", ".sdb", "'Grid Lines' table"],
              ["get_stories", "story_drifts", "pier / spandrel", "with label and story", ".edb", "story?"]),
             ("SAFE", ["get_stories", "story and joint drifts", ".fdb", "with label and story"],
@@ -806,7 +806,7 @@ def test_edition_fills_software_and_refuses_others(monkeypatch):
                                    "dry_run": True})
     assert ok.get("dry_run") is True
     ms = call("set_area_mesh", {"area_names": ["A1"]})
-    assert ms["_error"] and "not available in ETABS" in ms["message"]
+    assert ms["_error"] and "mode max_size or none" in ms["message"]
 
 
 def test_edition_client_config_replaces_combined_entry(tmp_path, monkeypatch):
@@ -1631,9 +1631,12 @@ def test_014_gap_link_and_nonlinear_case():
 
 def test_contour_scales_match_programs():
     import diagrams as dg
-    # SAP2000 27 labelled M11 from -33.70 to 16.44 as 14 / 10.5 / ... / -31.5
-    assert dg.contour_levels(-33.701, 16.441) == [14 - 3.5 * i for i in range(14)]
-    # ETABS 23 showed -32 ... 32 by 4 for -31.57 ... 16.58; SAFE 23 -0.35 ... 0.35 by 0.05
-    assert dg.symmetric_levels(-31.566, 16.584) == [4 * i for i in range(-8, 9)]
-    assert dg.symmetric_levels(-0.345, 0.31)[0] == -0.35
-    assert len(dg._etabs_colors(16)) == 16
+    # SAP2000 27: M11 -33.70 / 16.44 -> 15 bands -35 ... 17.5 by 3.5 (labels 14 ... -31.5)
+    b = dg.csi_bounds(-33.701, 16.441, "sap")
+    assert len(b) == 16 and b[0] == -35 and b[-1] == 17.5 and b[1:-1][-1] == 14
+    # ETABS 23: M11 -31.57 / 16.58 -> -32 ... 28 by 4; F22 -> -220 ... 80 by 20
+    b = dg.csi_bounds(-31.566, 16.584, "etabs")
+    assert b[0] == -32 and b[-1] == 28
+    b = dg.csi_bounds(-213.6, 66.0, "etabs")
+    assert b[0] == -220 and b[-1] == 80
+    assert len(dg.CSI15) == 15

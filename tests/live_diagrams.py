@@ -91,10 +91,16 @@ def build(S: dict, sw: str) -> None:
     check(f"{sw}: spec built", isinstance(b, dict) and b.get("completed") is True, b)
     show("slabs", "create_areas", {**S, "units": U, "section": "SLAB200", "areas": slabs}, limit=400)
     show("wall", "create_areas", {**S, "units": U, "section": "WALL250", "areas": walls}, limit=400)
-    if sw == "SAP2000":
-        show("mesh slabs and wall (1 m)", "set_area_mesh",
-             {**S, "units": U, "area_names": floors + [w["name"] for w in walls], "method": "auto_mesh",
-              "mode": "max_size", "max_size_1": 1.0, "max_size_2": 1.0}, limit=400)
+    if sw in ("SAP2000", "ETABS"):          # ETABS: walls on 'Default' are one element per panel (measured)
+        m = show("mesh slabs and wall (1 m)", "set_area_mesh",
+                 {**S, "units": U, "area_names": floors + [w["name"] for w in walls], "method": "auto_mesh",
+                  "mode": "max_size", "max_size_1": 1.0, "max_size_2": 1.0}, limit=400)
+        check(f"{sw}: mesh set", isinstance(m, dict) and not m.get("_error"), m)
+        if sw == "ETABS":
+            check("ETABS: walls read back as auto rectangular, sizes 1 m",
+                  set(m.get("walls_read_back", {}).values()) == {"Auto Rectangular"}
+                  and abs(float(m.get("wall_mesh_size_read_back", 0)) - 1.0) < 1e-6
+                  and abs(float(m.get("floor_mesh_size_read_back", 0)) - 1.0) < 1e-6, m)
     for pat, val in (("DL", 2.0), ("LL", 3.0)):
         show(f"{pat} on the slabs", "assign_area_load",
              {**S, "units": U, "area_names": floors, "load_pattern": pat, "load_type": "uniform", "value": val,
@@ -119,6 +125,11 @@ def report(S: dict, sw: str, case: str, name: str, extra: dict | None = None) ->
 
 if OUT.exists():
     shutil.rmtree(OUT, ignore_errors=True)     # a folder held open (e.g. in Explorer) is left; files are overwritten
+if (OUT / "models").exists() and any((OUT / "models").iterdir()):
+    # files still held by a program (e.g. a model left open): ETABS cannot replace its result files there
+    OUT = OUT.parent / f"{OUT.name}_{time.strftime('%H%M%S')}"
+    os.environ["CSI_MCP_OUTPUT"] = str(OUT)
+    print(f"previous output still in use - writing to {OUT}", flush=True)
 OUT.mkdir(parents=True, exist_ok=True)
 
 for sw in targets:
@@ -152,6 +163,8 @@ for sw in targets:
             show("analysis", "run_analysis", {**S}, limit=500)
             report(S, sw, "ULS", "ULS M", {"frame_component": "bending", "shell_component": "M11",
                                             "wall_component": "F22"})
+            report(S, sw, "ULS", "ULS M averaged", {"frame_component": "bending", "shell_component": "M11",
+                                                     "wall_component": "F22", "contour_averaging": "joints"})
             report(S, sw, "ULS", "ULS M22", {"frame_component": "bending", "shell_component": "M22",
                                               "wall_component": "M11"})
             report(S, sw, "LAT", "LAT V2", {"frame_component": "V2", "shell_component": "M11",

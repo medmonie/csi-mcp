@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.15.2 - 2026-11-27
+
+- `set_area_mesh` works in ETABS (it has no API call; through the program's own tables): walls get auto
+  rectangular mesh, and the model's wall / floor mesh size is set (mode max_size), or walls go back to Default (mode
+  none). Measured: an ETABS wall on 'Default' is one analysis element per panel - its contour was one bilinear patch
+  per storey; 'Auto Rectangular' at 1 m gives 24 elements per 6 x 3.5 m panel. The size tables follow the units
+  given (checked in kN-m, kip-in, N-mm). Read back in the answer.
+- Contour scale as the programs make it, measured again: 15 bands of a round step starting just below the minimum
+  (SAP2000 M11 -35 ... 17.5 by 3.5; ETABS M11 -32 ... 28 by 4, F22 -220 ... 80 by 20), the programs' own 15 colours
+  (sampled from their colour bars; the same palette in SAP2000, ETABS and SAFE), inner boundaries labelled. The
+  0.15.0 'symmetric about zero' ETABS / SAFE scale was wrong.
+- Finer interpolation inside each element (quads on a 4 x 4 bilinear grid up to 400 elements per view).
+- Report parameter `contour_averaging`: program_default (SAP2000 averaged, ETABS / SAFE not) | joints | none.
+- live_diagrams: meshes the ETABS slabs and wall at 1 m too; writes to a new folder when the last output is still
+  held by a program (an ETABS model left open locks its result files: 'FILE OPERATION ERROR 232' in the .LOG).
+
 ## 0.15.1 - 2026-11-27
 
 - Shell contours are smooth and continuous like the programs' displays: each element is split into linear triangles

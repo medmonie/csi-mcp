@@ -88,10 +88,80 @@ class MeshP(Params):
     snapshot: bool = SNAPSHOT
 
 
+WALL_MESH = "Area Assignments - Wall Auto Mesh Options"
+WALL_SIZE = "Analysis Options - Automatic Rectangular Mesh Options for Walls"
+FLOOR_SIZE = "Analysis Options - Automatic Mesh Settings for Floors"
+
+
+def _etabs_mesh(p: MeshP) -> dict[str, Any]:
+    """ETABS: no API call; the program's own assignment / option tables. Walls: auto rectangular mesh (per wall) at
+    the model's wall mesh size; 'none' puts the wall back to Default (one element per wall panel, measured). Floors:
+    the model's floor mesh size (floors on Default use it)."""
+    import db_edit
+    if p.method != "auto_mesh" or p.mode not in ("max_size", "none"):
+        raise CSIValidationError("ETABS: set_area_mesh takes method auto_mesh with mode max_size or none.",
+                                 hint="ETABS meshes walls rectangularly and floors with one size for the model; "
+                                      "give max_size_1 (and max_size_2) for the element size.")
+    if p.mode == "max_size" and not (p.max_size_1 > 0 and p.max_size_2 > 0):
+        raise CSIValidationError("max_size mode needs max_size_1 and max_size_2 > 0.")
+    size = min(p.max_size_1, p.max_size_2) if p.mode == "max_size" else 0.0
+    sap = bridge.sap_model(p.software)
+    areas = _targets(sap, "AreaObj", p.area_names, p.group, "areas")
+    _, wf, wrows = db_edit.read_table(sap, WALL_MESH)
+    wall_names = {r.get("UniqueName") for r in wrows}
+    walls = [a for a in areas if a in wall_names]
+    floors = [a for a in areas if a not in wall_names]
+    if p.mode == "none" and floors:
+        raise CSIValidationError(f"ETABS: mode none applies to walls only; {len(floors)} of the areas are floors.",
+                                 hint="Floors always get the model's floor mesh; give mode max_size to change its size.")
+    plan = {"method": p.method, "mode": p.mode, "walls": walls[:50], "floors": floors[:50], "max_size": size,
+            "units": describe_units(p.units),
+            "note": "ETABS has one wall mesh size and one floor mesh size for the whole model: the size given here "
+                    "applies to every meshed wall / floor; walls named here are set to auto rectangular mesh."}
+    if p.dry_run:
+        locked = bridge.is_locked(sap)
+        return _dry(plan, model_locked=locked, needs_allow_unlock=bool(locked) and not p.allow_unlock)
+    snap, was_locked = _start_edit(p, sap, "before_mesh", "change the mesh")
+    out: dict[str, Any] = {**plan, "model_was_unlocked": was_locked}
+    with bridge.units_scope(sap, p.units):
+        if walls:
+            ver, wf, wrows = db_edit.read_table(sap, WALL_MESH)
+            for r in wrows:
+                if r.get("UniqueName") in walls:
+                    r["MeshOption"] = "Auto Rectangular" if p.mode == "max_size" else "Default"
+            db_edit.write_table(sap, WALL_MESH, ver, wf, wrows)
+            if size:
+                ver, sf, srows = db_edit.read_table(sap, WALL_SIZE)
+                srows[0]["MaxMeshSize"] = f"{size:g}"
+                db_edit.write_table(sap, WALL_SIZE, ver, sf, srows)
+        if floors and size:
+            ver, ff, frows = db_edit.read_table(sap, FLOOR_SIZE)
+            frows[0]["MaxMeshSize"] = f"{size:g}"
+            db_edit.write_table(sap, FLOOR_SIZE, ver, ff, frows)
+        # read back
+        _, _, wrows = db_edit.read_table(sap, WALL_MESH)
+        out["walls_read_back"] = {r["UniqueName"]: r.get("MeshOption") for r in wrows if r.get("UniqueName") in walls}
+        out["wall_mesh_size_read_back"] = db_edit.read_table(sap, WALL_SIZE)[2][0].get("MaxMeshSize")
+        out["floor_mesh_size_read_back"] = db_edit.read_table(sap, FLOOR_SIZE)[2][0].get("MaxMeshSize")
+    wrong = [w for w, o in out["walls_read_back"].items()
+             if o != ("Auto Rectangular" if p.mode == "max_size" else "Default")]
+    _refresh_view(sap)
+    if snap:
+        out["snapshot"] = snap
+    out["done"] = len(walls) + len(floors) - len(wrong)
+    if wrong:
+        out["message"] = f"{len(wrong)} walls did not take the mesh option."
+        raise ActionFailed(out)
+    return out
+
+
 @action("set_area_mesh", "Set the analysis mesh of areas (auto mesh by divisions, max size or general divide; or "
-        "none) or divide areas into smaller area objects (restraints carried to the new edge joints).", "Modelling",
-        "edit", MeshP, programs="S")
+        "none) or divide areas into smaller area objects (restraints carried to the new edge joints)[[E:; in ETABS "
+        "walls get auto rectangular mesh and floors the model's floor mesh size (mode max_size or none)]].", "Modelling",
+        "edit", MeshP, programs="SE")
 def set_area_mesh(p: MeshP) -> dict[str, Any]:
+    if p.software == "ETABS":
+        return _etabs_mesh(p)
     programs.require(p.software, "area_auto_mesh" if p.method == "auto_mesh" else "area_divide")
     if p.mode == "max_size" and not (p.max_size_1 > 0 and p.max_size_2 > 0):
         raise CSIValidationError("max_size mode needs max_size_1 and max_size_2 > 0.")

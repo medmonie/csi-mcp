@@ -1,7 +1,7 @@
-# CSI MCP actions (server 0.15.1)
+# CSI MCP actions (server 0.15.2)
 
 One MCP server per program since 0.7.0; each lists only what its program's API can do:
 
-- [ETABS](ACTIONS-ETABS.md): tool `etabs`, 66 actions + help
+- [ETABS](ACTIONS-ETABS.md): tool `etabs`, 67 actions + help
 - [SAP2000](ACTIONS-SAP2000.md): tool `sap2000`, 66 actions + help
 - [SAFE](ACTIONS-SAFE.md): tool `safe`, 59 actions + help

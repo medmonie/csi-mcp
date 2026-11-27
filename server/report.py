@@ -66,6 +66,9 @@ class ReportP(Params):
         "its local axes) | P | V2 | V3 | T | M2 | M3"))
     shell_component: Literal["F11", "F22", "F12", "M11", "M22", "M12", "V13", "V23", "MMax", "MMin", "VMax"] = Field(
         default="M11", description="shell force / moment for the slab (floor) contours, default M11")
+    contour_averaging: Literal["program_default", "joints", "none"] = Field(default="program_default", description=(
+        "shell contours: program_default (as the program shows them: SAP2000 averaged at all joints, ETABS / SAFE "
+        "not averaged) | joints (averaged at the joints: continuous across elements) | none (element values)"))
     wall_component: Literal["F11", "F22", "F12", "M11", "M22", "M12", "V13", "V23", "MMax", "MMin", "VMax"] = Field(
         default="F22", description="shell force / moment for the wall (vertical shell) contours, default F22")
     drift_limit: float | None = Field(default=None, gt=0, description="drift ratio given by the engineer, drawn on the "
@@ -535,16 +538,23 @@ class _Pdf:
                                                  f"{comp} is zero there (|value| < 1e-6, e.g. membrane decks)"))
                     return
                 raw = [x for e in els for x in e["vals"]]
-                d, (lo, hi) = dg.shell_contour(els, comp, w, h, style=self.style)
+                avg = {"program_default": None, "joints": True, "none": False}[self.p.contour_averaging]
+                d, (lo, hi) = dg.shell_contour(els, comp, w, h, averaged=avg, style=self.style)
                 un = f"{unit(comp)}/{u['length']}"
-                if self.style == "sap":
+                if avg is not None:
+                    how = ((f"averaged at the joints (contour_averaging joints) from {dg._fmt(lo)} to {dg._fmt(hi)} "
+                            f"{un}; unaveraged element values from {dg._fmt(min(raw))} to {dg._fmt(max(raw))} {un}. ")
+                           if avg else f"not averaged (contour_averaging none), from {dg._fmt(lo)} to {dg._fmt(hi)} {un}. ")
+                    how += "Colours and bands as the program's scale (15 bands of a round step from just below the minimum)."
+                elif self.style == "sap":
                     how = (f"averaged at the joints (SAP2000's default display) from {dg._fmt(lo)} to {dg._fmt(hi)} "
                            f"{un}; unaveraged element values from {dg._fmt(min(raw))} to {dg._fmt(max(raw))} {un}. "
-                           "Colours as SAP2000's scale: blue = most positive ... purple = most negative.")
+                           "Colours and bands as SAP2000's scale (15 bands of a round step from just below the minimum): "
+                           "blue = most positive ... purple = most negative.")
                 else:
                     how = (f"not averaged at the nodes (the program's default display), from {dg._fmt(lo)} to "
-                           f"{dg._fmt(hi)} {un}. Colours as the program's scale, symmetric about zero: purple ... "
-                           "yellow below zero, green ... blue above.")
+                           f"{dg._fmt(hi)} {un}. Colours and bands as the program's scale (15 bands of a round step from "
+                           "just below the minimum): purple = most negative ... blue = most positive.")
                 block(title, f"{len(els)} shell elements; {comp} {how}", d)
 
             slabs: dict[float, list[dict]] = defaultdict(list)
