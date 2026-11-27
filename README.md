@@ -16,7 +16,7 @@ program**, each with one tool named after it: **`etabs(action, params)`, `sap200
 | ETABS | 23.2.0 | OK | OK |
 | SAFE | 23.3.2 | OK | OK |
 
-Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.19.0
+Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.20.0
 (roadmap Phases 0-2 with V1 verification: 238 / 238 values match CSI's published results: foundation, full model read, results depth; report stages R1-R3; Phase 3 first batch:
 area mesh, joint patterns, area loads; 0.7.0: one server per program; 0.8.0: definitions - materials, sections,
 springs, patterns, cases, combinations, mass source; 0.9.0: objects - points, frames, areas, their assignments,
@@ -178,6 +178,7 @@ one automatically when the rows are cut to `max_rows`, or always with `export: c
 | `tests\run_live_slabs.bat [SAFE] [ETABS] [--hidden]` | 0.18.0: tendon property, PT load patterns, parabolic tendon and design strip on a simply supported slab (SAFE: strip axial = -P, moment = P e about mid-depth after analysis), ETABS towers | `tests\results\live_slabs.txt` |
 | `tests\run_live_sap5.bat [--hidden]` | 0.19.0: SAP2000 cable (catenary H), solids (P h / E A), tendon in a beam (P e) | `tests\results\live_sap5.txt` |
 | `tests\run_live_sap5c.bat [--hidden]` | 0.19.0: SAP2000 staged construction (w L^2/16), ASCE 41-17 hinge + pushover (Z Fye), H20-44 moving load (influence line) | `tests\results\live_sap5c.txt` |
+| `tests\run_live_word.bat [--hidden]` | 0.20.0: export_report as docx / rtf / pdf and export_tables_to_excel on an analysed SAP2000 frame, opened by Word and Excel through COM | `tests\results\live_word.txt` |
 | `tests\run_diag_wind.bat` | 0.16.0 probe: auto wind API methods (with parameter names) and wind tables in SAP2000 / ETABS | `tests\results\diag_wind.txt` |
 | `tests\run_verify_v4.bat [--hidden]` | V4: copies of CSI's ETABS design examples (ACI 318-19 Ex001 / Ex002, AISC 360-16 Ex001 / Ex002) designed through the actions with the code and combinations they hold, compared with CSI's published values; design report per example | `tests\results\verify_v4.txt`, `tests\results\verify\v4\` |
 | `tests\run_diag_phase5.bat` | raw API: SetASCE716 vs SetASCE716_1 in ETABS / SAP2000, auto seismic tables, SAP2000 design table names | `tests\results\diag_phase5.txt` |

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.0 - 2026-11-27
+
+Reports in Word and tables to Excel, as the programs offer them. 1 new action, 2 extended.
+- `export_report` format: pdf (default) | docx | rtf - the same report (cover, model, diagrams, definitions,
+  tables, results, result diagrams, design) in Word: headings, notes, tables with the header row repeated on every
+  page, diagrams as pictures (each with its heading and note kept on one page), the report's page size,
+  orientation and margins, header (title, program) and footer (model, units, page number). Written without extra
+  packages (Office Open XML / RTF; diagrams rasterised with Pillow at 144 dpi). Checked: Microsoft Word opens both
+  (docx 10 pages, rtf 8 pages, 8 pictures and 20 tables each, for a SAP2000 portal frame with results).
+- `export_tables_to_excel`: the chosen database tables in one .xlsx, a sheet per table (as Export > Tables to
+  Excel): table name, program and model, units and cases on top, field names and each field's units, the rows with
+  numbers as numbers, header frozen and filters on, plus an Index sheet. Checked: Excel opens it; joint reactions
+  4 rows (2 joints x 2 cases).
+- `query_database_table` export xlsx.
+- Report templates stay outside the server (the user's decision: a skill or agent fills a firm's template).
+
 ## 0.19.0 - 2026-11-27
 
 Phase 5 completed for SAP2000: cables, solids, tendon objects, staged construction, frame hinges with pushover,

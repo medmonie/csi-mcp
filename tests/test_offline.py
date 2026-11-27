@@ -1668,3 +1668,57 @@ def test_autoload_code_matching():
         al._coerce("Terrain", "int", 2.5)
     assert al._coerce("UserZ", "bool", "Yes") is True
     assert al._same(0.12307692, 0.123076920001) and not al._same("B", "C")
+
+
+# --------------------------------------------------------------------------- 0.20.0: Word / RTF report, Excel
+
+def test_report_docx_and_rtf(tmp_path, monkeypatch):
+    import xml.dom.minidom
+    import zipfile
+    monkeypatch.setenv("CSI_MCP_OUTPUT", str(tmp_path))
+    sap = fresh()
+    sap.analysed = True
+    call("assign_point_or_frame_load", {"software": "ETABS", "target_type": "frame", "object_names": ["F1"],
+                                        "load_pattern": "Dead", "values": [12.0]})
+    r = call("export_report", {"software": "ETABS", "format": "docx", "table_keys": ["Story Drifts"],
+                               "project_info": {"title": "Tower A"}})
+    assert not r.get("_error"), r
+    doc = Path(r["report"])
+    assert doc.suffix == ".docx" and r["figures"] >= 6 and r["tables"]
+    with zipfile.ZipFile(doc) as z:
+        names = z.namelist()
+        for n in names:
+            if n.endswith(".xml") or n.endswith(".rels"):
+                xml.dom.minidom.parseString(z.read(n))                  # every part is well-formed XML
+        body = z.read("word/document.xml").decode()
+        assert sum(n.startswith("word/media/") for n in names) >= 6
+        assert z.read("word/media/image1.png")[:8] == b"\x89PNG\r\n\x1a\n"
+    assert "<w:tblHeader/>" in body and "Story Drifts" in body and "Model diagrams" in body
+    rt = call("export_report", {"software": "ETABS", "format": "rtf", "sections": ["cover", "diagrams"]})
+    assert not rt.get("_error"), rt
+    text = Path(rt["report"]).read_text(encoding="ascii")
+    assert text.startswith("{\\rtf1") and text.rstrip().endswith("}") and "\\pngblip" in text
+    assert text.count("{") == text.count("}")
+    bad = call("export_report", {"software": "ETABS", "format": "docx", "output_path": str(tmp_path / "a.pdf")})
+    assert bad["_error"] and ".docx" in bad["message"]
+
+
+def test_export_tables_to_excel(tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+    monkeypatch.setenv("CSI_MCP_OUTPUT", str(tmp_path))
+    _analysed()
+    r = call("export_tables_to_excel", {"software": "ETABS", "table_keys": ["Story Drifts"],
+                                        "load_cases_or_combos": ["DCON1", "ENV"]})
+    assert not r.get("_error"), r
+    wb = load_workbook(r["workbook"])
+    assert wb.sheetnames[0] == "Index" and [s["sheet"] for s in r["sheets"]] == wb.sheetnames[1:]
+    ws = wb[r["sheets"][0]["sheet"]]
+    assert ws["A1"].value == "Story Drifts" and ws.freeze_panes == "A6"
+    head = [c.value for c in ws[4]]
+    assert "Drift" in head
+    drift = [row[head.index("Drift")] for row in ws.iter_rows(min_row=6, values_only=True)]
+    assert drift and all(isinstance(v, float) for v in drift) and r["sheets"][0]["rows"] == len(drift)
+    bad = call("export_tables_to_excel", {"software": "ETABS", "table_keys": ["Story Drift"]})
+    assert bad["_error"] and "Story Drifts" in bad["hint"]
+    q = call("query_database_table", {"software": "ETABS", "table_key": "Story Drifts", "export": "xlsx"})
+    assert q["export_path"].endswith(".xlsx") and Path(q["export_path"]).is_file()

@@ -221,9 +221,10 @@ class QueryP(Params):
     descending: bool = Field(default=True, description="default true")
     sort_by_abs: bool = Field(default=True, description="sort a numeric column by absolute value, default true")
     units: UnitPreset = UNITS
-    export: Literal["auto", "csv", "json", "none"] = Field(default="auto", description=(
+    export: Literal["auto", "csv", "xlsx", "json", "none"] = Field(default="auto", description=(
         "write the filtered rows to a file in the output folder: auto (default) = CSV when the rows are cut to "
-        "max_rows, csv / json = always, none = never"))
+        "max_rows, csv / xlsx / json = always, none = never (several tables in one workbook: "
+        "export_tables_to_excel)"))
 
 
 class SummaryP(Params):
@@ -844,8 +845,8 @@ def query_database_table(p: QueryP) -> dict[str, Any]:
     df = sort_frame(df, p.sort_by, p.descending, p.sort_by_abs)
     out = records(df, p.max_rows)
     export_path = None
-    if p.export in ("csv", "json") or (p.export == "auto" and len(df) > p.max_rows):
-        export_path = str(safety.export_frame(df, f"{p.software}_{key}", "json" if p.export == "json" else "csv"))
+    if p.export in ("csv", "xlsx", "json") or (p.export == "auto" and len(df) > p.max_rows):
+        export_path = str(safety.export_frame(df, f"{p.software}_{key}", p.export if p.export != "auto" else "csv"))
     return {"export_path": export_path, "table_key": key, "table_version": version, "units": describe_units(p.units), "columns": list(df.columns),
             "total_rows": total, "rows_after_filters": int(len(df)), "returned_rows": len(out),
             "truncated": len(df) > p.max_rows, "filters_applied": applied,
@@ -910,3 +911,4 @@ import sap_objects  # noqa: E402,F401 - registers SAP2000 cables, solids, tendon
 import sap_analysis  # noqa: E402,F401 - registers staged construction, hinges, moving loads
 import results  # noqa: E402,F401 - registers the Phase 2 results actions
 import report  # noqa: E402,F401 - registers export_report (report.py builds on the actions above)
+import excel_export  # noqa: E402,F401 - registers export_tables_to_excel

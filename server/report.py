@@ -44,9 +44,12 @@ RESULT_TYPES = ("base_reactions", "story_drifts", "modal_periods", "joint_displa
 
 class ReportP(Params):
     software: Software = SOFTWARE
+    format: Literal["pdf", "docx", "rtf"] = Field(default="pdf", description=(
+        "pdf (default) | docx (Word) | rtf (Word / any word processor) - the same content in each"))
     output_path: str | None = Field(default=None, description=(
-        "full path of the .pdf; default: Documents\\CsiMcp\\reports\\<model>_<date-time>.pdf"))
-    overwrite: bool = Field(default=False, description="replace an existing PDF at output_path")
+        "full path of the file (.pdf / .docx / .rtf as format); default: Documents\\CsiMcp\\reports\\<model>_"
+        "<date-time>.<format>"))
+    overwrite: bool = Field(default=False, description="replace an existing file at output_path")
     sections: list[Literal["cover", "model", "diagrams", "definitions", "tables", "results", "result_diagrams",
                            "design"]] | None = Field(default=None, description=(
         "cover | model | diagrams | definitions | tables | results | result_diagrams | design; default: all (tables "
@@ -755,12 +758,20 @@ class _Pdf:
             pd.DataFrame([{"Item": a, "Reason": b} for a, b in self.data["skipped"]]), "Items not in this report",
             "export_report")
 
-    def build(self) -> None:
-        from reportlab.platypus import SimpleDocTemplate
+    def story(self) -> list:
         story: list = []
         for name in self.data["sections"]:
             story += getattr(self, name)()
-        story += self.skipped()
+        return story + self.skipped()
+
+    def meta(self) -> dict[str, Any]:
+        return {"title": self.title, "program": self.program, "model_file": self.model_file,
+                "units_text": self.units_text, "generated": self.generated, "pagesize": tuple(self.pagesize),
+                "margin": self.margin, "landscape": self.orientation == "landscape"}
+
+    def build(self) -> None:
+        from reportlab.platypus import SimpleDocTemplate
+        story = self.story()
         doc = SimpleDocTemplate(str(self.path), pagesize=self.pagesize, leftMargin=self.margin,
                                 rightMargin=self.margin, topMargin=self.margin + 4, bottomMargin=self.margin + 6,
                                 title=self.title, author="CSI MCP", subject=f"{self.program} - {self.model_file}")
@@ -792,8 +803,8 @@ def _where(g: dict[str, Any]) -> str:
 def _target(p: ReportP) -> Path:
     if p.output_path:
         path = Path(os.path.expandvars(os.path.expanduser(p.output_path))).resolve()
-        if path.suffix.lower() != ".pdf":
-            raise TableError("output_path must end in .pdf")
+        if path.suffix.lower() != "." + p.format:
+            raise TableError(f"output_path must end in .{p.format} (format {p.format})")
         if not path.parent.is_dir():
             raise TableError(f"Folder does not exist: {path.parent}")
     else:
@@ -802,10 +813,10 @@ def _target(p: ReportP) -> Path:
         folder = safety.output_root() / "reports"
         folder.mkdir(parents=True, exist_ok=True)
         base = f"{safety.safe_stem(stem)}_{safety.stamp()}"
-        path = folder / f"{base}.pdf"
+        path = folder / f"{base}.{p.format}"
         n = 2
         while path.exists():          # default names never collide (two reports in the same second)
-            path = folder / f"{base}_{n}.pdf"
+            path = folder / f"{base}_{n}.{p.format}"
             n += 1
         return path
     if path.exists() and not p.overwrite:
@@ -813,11 +824,11 @@ def _target(p: ReportP) -> Path:
     return path
 
 
-@action("export_report", "PDF report of the model and its results built from the program's data: cover, model "
-        "(counts, case status), diagrams (3-D overview, plans, elevations, load views per pattern), definitions "
-        "(materials, sections, patterns, cases, combinations), chosen database "
-        "tables and headline results. A4 portrait unless page_size / orientation say otherwise; long tables also go "
-        "to CSV. Writes only the PDF / CSV files; the model is not changed.", "Output", "read", ReportP,
+@action("export_report", "Report of the model and its results built from the program's data, as PDF, Word (.docx) or "
+        "RTF: cover, model (counts, case status), diagrams (3-D overview, plans, elevations, load views per pattern), "
+        "definitions (materials, sections, patterns, cases, combinations), chosen database tables and headline "
+        "results, result diagrams and design. A4 portrait unless page_size / orientation say otherwise; long tables "
+        "also go to CSV. Writes only the report / CSV files; the model is not changed.", "Output", "read", ReportP,
         long_running=True, options={"result_diagrams": {"story_charts": "E"},
                                     "design_kinds": {"concrete_slab": "EF", "shear_wall": "E"}},
         fields={"drift_limit": "E"})
@@ -825,11 +836,20 @@ def export_report(p: ReportP) -> dict[str, Any]:
     path = _target(p)
     data = gather(p)
     pdf = _Pdf(p, data, path)
+    extra: dict[str, Any] = {}
     try:
-        pdf.build()
+        if p.format == "pdf":
+            pdf.build()
+        else:
+            import doc_export
+            bl = doc_export.blocks(pdf.story())
+            writer = doc_export.write_docx if p.format == "docx" else doc_export.write_rtf
+            extra = writer(bl, pdf.meta(), path)
     except PermissionError as exc:
-        raise TableError(f"Cannot write {path}: {exc}", hint="Close the PDF if it is open in a viewer.") from exc
-    return {"report": str(path), "pages": pdf.pages, "page_size": p.page_size, "orientation": pdf.orientation,
+        raise TableError(f"Cannot write {path}: {exc}", hint="Close the file if it is open (viewer or Word).") from exc
+    return {"report": str(path), "format": p.format,
+            "pages": pdf.pages if p.format == "pdf" else "set by Word when the file is opened",
+            "page_size": p.page_size, "orientation": pdf.orientation,
             "sections": data["sections"], "skipped": [{"item": a, "reason": b} for a, b in data["skipped"]],
             "figures": pdf.figures, "csv_appendices": pdf.csv_files, "units": describe_units(p.units),
-            "tables": [{"key": k, "rows": len(df)} for k, df in data.get("tables", [])]}
+            "tables": [{"key": k, "rows": len(df)} for k, df in data.get("tables", [])], **extra}
