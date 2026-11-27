@@ -1627,3 +1627,13 @@ def test_014_gap_link_and_nonlinear_case():
     rb = r["read_back"]
     assert rb["type"] in ("NonlinearStatic", "nonlinear_static", "StaticNonlinear") or rb["geometric_nonlinearity"] == "p_delta", rb
     assert rb["geometric_nonlinearity"] == "p_delta" and rb["loads"][0]["name"] == "Dead", rb
+
+
+def test_contour_scales_match_programs():
+    import diagrams as dg
+    # SAP2000 27 labelled M11 from -33.70 to 16.44 as 14 / 10.5 / ... / -31.5
+    assert dg.contour_levels(-33.701, 16.441) == [14 - 3.5 * i for i in range(14)]
+    # ETABS 23 showed -32 ... 32 by 4 for -31.57 ... 16.58; SAFE 23 -0.35 ... 0.35 by 0.05
+    assert dg.symmetric_levels(-31.566, 16.584) == [4 * i for i in range(-8, 9)]
+    assert dg.symmetric_levels(-0.345, 0.31)[0] == -0.35
+    assert len(dg._etabs_colors(16)) == 16

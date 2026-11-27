@@ -12,6 +12,8 @@ drifts in ETABS, modal periods and mass, peak joint displacements).
 """
 from __future__ import annotations
 
+from collections import defaultdict
+
 import datetime as dt
 import math
 import os
@@ -63,7 +65,9 @@ class ReportP(Params):
         "frame force drawn in the elevations: bending (default: the in-plane moment of each member, M3 or M2 from "
         "its local axes) | P | V2 | V3 | T | M2 | M3"))
     shell_component: Literal["F11", "F22", "F12", "M11", "M22", "M12", "V13", "V23", "MMax", "MMin", "VMax"] = Field(
-        default="M11", description="shell force / moment for the contours, default M11")
+        default="M11", description="shell force / moment for the slab (floor) contours, default M11")
+    wall_component: Literal["F11", "F22", "F12", "M11", "M22", "M12", "V13", "V23", "MMax", "MMin", "VMax"] = Field(
+        default="F22", description="shell force / moment for the wall (vertical shell) contours, default F22")
     drift_limit: float | None = Field(default=None, gt=0, description="drift ratio given by the engineer, drawn on the "
                                                                       "drift chart")
     diagrams: list[Literal["overview", "plans", "elevations", "loads"]] | None = Field(
@@ -146,7 +150,8 @@ def gather(p: ReportP) -> dict[str, Any]:
                         if "geometry" not in data:
                             data["geometry"] = report_geometry(sap, p.software)
                         data["rdiag"] = rs.diagram_data(sap, p.software, case, p.result_diagrams or list(RESULT_VIEWS),
-                                                        p.frame_component, p.shell_component)
+                                                        p.frame_component, p.shell_component,
+                                                        wall_comp=p.wall_component)
                     data["skipped"] += data["rdiag"]["skipped"]
                 except (CSIError, TableError, KeyError, ValueError) as exc:
                     data["skipped"].append(("result diagrams", str(exc)[:300]))
@@ -267,6 +272,8 @@ class _Pdf:
         self.units = describe_units(p.units)
         self.units_text = f"{self.units['force']}, {self.units['length']}, {self.units['temperature']}"
         self.program = f"{st['software']} {st.get('version') or ''}".strip()
+        # diagrams drawn as the program draws them: SAP2000's look, or ETABS / SAFE's
+        self.style = "sap" if "SAP" in str(st["software"]).upper() else "etabs"
         self.model_file = st.get("model_file") or "(model not saved)"
         info = p.project_info or {}
         self.title = info.get("title") or f"{st['software']} analysis report"
@@ -503,31 +510,62 @@ class _Pdf:
         if "forces" in r:
             comp = self.p.frame_component
             for title, axis, c, _ in dg.elevation_planes(geo, self.p.max_plans):
-                d, vmax, what = dg.frame_diagram(geo, r["forces"], axis, c, w, h, comp, r.get("axes"))
+                d, vmax, what = dg.frame_diagram(geo, r["forces"], axis, c, w, h, comp, r.get("axes"),
+                                                 style=self.style)
                 if vmax:
                     moment = comp == "bending" or comp.startswith(("M", "T"))
                     note = (f"{what} at the output stations; end and peak values in {u['force']}"
                             + (f"-{u['length']}" if moment else "") + ". ")
+                    if self.style == "etabs":
+                        note += "Drawn as the program draws it by default: one colour, not filled. "
                     if comp == "bending":
                         note += ("In-plane bending of each member (M3 or M2 from its local axes), drawn toward its "
                                  "local -2 (M3) / -3 (M2) side: sagging of a beam with local 2 up plots below it.")
                     block(f"{what} - {title}", note, d)
         if r.get("shells"):
-            comp = self.p.shell_component
-            levels = sorted({e["z"] for e in r["shells"] if e["flat"]}, reverse=True)[:self.p.max_plans]
-            for z in levels:
-                els = [(e["poly"], e["value"]) for e in r["shells"] if e["flat"] and e["z"] == z]
-                if max((abs(v_) for _, v_ in els), default=0.0) < 1e-6:
-                    self.data["skipped"].append((f"{comp} contour at Z = {dg._fmt(z)}",
+            unit = lambda c_: u["force"] + ("" if c_.startswith(("F", "V")) else f"-{u['length']}")  # noqa: E731
+            stories = geo.get("stories") or []
+
+            def level_name(z: float) -> str:
+                return next((s_["name"] for s_ in stories if abs(s_["elevation"] - z) < 1e-3), f"Z = {dg._fmt(z)}")
+
+            def contour(title: str, comp: str, els: list[dict], where: str) -> None:
+                if max((abs(x) for e in els for x in e["vals"]), default=0.0) < 1e-6:
+                    self.data["skipped"].append((f"{comp} contour, {where}",
                                                  f"{comp} is zero there (|value| < 1e-6, e.g. membrane decks)"))
-                    continue
-                d, (lo, hi) = dg.shell_contour(els, comp, w, h)
-                name = next((s_["name"] for s_ in geo.get("stories") or [] if abs(s_["elevation"] - z) < 1e-3),
-                            f"Z = {dg._fmt(z)}")
-                block(f"{comp} contour - {name}", f"{len(els)} shell elements; {comp} from {dg._fmt(lo)} to "
-                                                  f"{dg._fmt(hi)} {u['force']}" + ("" if comp.startswith(("F", "V"))
-                                                                                  else f"-{u['length']}")
-                      + f"/{u['length']}.", d)
+                    return
+                raw = [x for e in els for x in e["vals"]]
+                d, (lo, hi) = dg.shell_contour(els, comp, w, h, style=self.style)
+                un = f"{unit(comp)}/{u['length']}"
+                if self.style == "sap":
+                    how = (f"averaged at the joints (SAP2000's default display) from {dg._fmt(lo)} to {dg._fmt(hi)} "
+                           f"{un}; unaveraged element values from {dg._fmt(min(raw))} to {dg._fmt(max(raw))} {un}. "
+                           "Colours as SAP2000's scale: blue = most positive ... purple = most negative.")
+                else:
+                    how = (f"not averaged at the nodes (the program's default display), from {dg._fmt(lo)} to "
+                           f"{dg._fmt(hi)} {un}. Colours as the program's scale, symmetric about zero: purple ... "
+                           "yellow below zero, green ... blue above.")
+                block(title, f"{len(els)} shell elements; {comp} {how}", d)
+
+            slabs: dict[float, list[dict]] = defaultdict(list)
+            walls: dict[tuple[str, float], list[dict]] = defaultdict(list)
+            sc, wc = self.p.shell_component, self.p.wall_component
+            for e in r["shells"]:
+                xs, ys, zs = zip(*e["xyz"])
+                if max(zs) - min(zs) < 1e-3 and sc in e["values"]:
+                    slabs[round(sum(zs) / len(zs), 3)].append(
+                        {"poly": [(x, y) for x, y, _ in e["xyz"]], "nodes": e["nodes"], "vals": e["values"][sc]})
+                elif wc in e["values"] and max(xs) - min(xs) < 1e-3:
+                    walls[("X", round(xs[0], 3))].append(
+                        {"poly": [(y, z) for _, y, z in e["xyz"]], "nodes": e["nodes"], "vals": e["values"][wc]})
+                elif wc in e["values"] and max(ys) - min(ys) < 1e-3:
+                    walls[("Y", round(ys[0], 3))].append(
+                        {"poly": [(x, z) for x, _, z in e["xyz"]], "nodes": e["nodes"], "vals": e["values"][wc]})
+            for z in sorted(slabs, reverse=True)[:self.p.max_plans]:
+                contour(f"{sc} contour - {level_name(z)}", sc, slabs[z], level_name(z))
+            for (ax, c) in sorted(walls, key=lambda k_: -len(walls[k_]))[:self.p.max_plans]:
+                where = f"wall plane {ax} = {dg._fmt(c)}"
+                contour(f"{wc} contour - {where}", wc, walls[(ax, c)], where)
         elev = {s_["name"]: s_["elevation"] for s_ in geo.get("stories") or []}
         if r.get("drifts") and elev:
             rows = [{**x, "Elevation": elev[x["Story"]]} for x in r["drifts"] if x["Story"] in elev]

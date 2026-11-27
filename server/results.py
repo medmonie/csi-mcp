@@ -426,7 +426,7 @@ def _peak_by(df, key: str, cols: list[str]) -> dict[str, tuple[float, ...]]:
 
 
 def diagram_data(sap: Any, sw: str, case: str, views: list[str], frame_comp: str, shell_comp: str,
-                 max_points: int = 20000) -> dict[str, Any]:
+                 max_points: int = 20000, wall_comp: str = "F22") -> dict[str, Any]:
     cases, combos = _selection(sap, [case])
     out: dict[str, Any] = {"case": case, "skipped": []}
 
@@ -474,16 +474,18 @@ def diagram_data(sap: Any, sw: str, case: str, views: list[str], frame_comp: str
                     c = _quiet("PointElm.GetCoordCartesian", sap.PointElm.GetCoordCartesian, str(p_), 0.0, 0.0, 0.0)
                     if c:
                         xyz[str(p_)] = (float(c[0]), float(c[1]), float(c[2]))
+                comps = [c_ for c_ in dict.fromkeys([shell_comp, wall_comp]) if c_ in df.columns]
                 elems = []
                 for el, g in df.groupby("Element", sort=False):
                     first = g.drop_duplicates("PointElm")
                     nodes = [str(n) for n in first["PointElm"]]
                     if len(nodes) < 3 or any(n not in xyz for n in nodes):
                         continue
-                    peak = g.groupby("PointElm")[shell_comp].apply(lambda s: s.loc[s.abs().idxmax()])
-                    zs = [xyz[n][2] for n in nodes]
-                    elems.append({"z": round(sum(zs) / len(zs), 3), "flat": max(zs) - min(zs) < 1e-3,
-                                  "poly": [(xyz[n][0], xyz[n][1]) for n in nodes], "value": float(peak.mean())})
+                    # value at each element corner (envelopes: the larger magnitude of max and min)
+                    corner = {c_: g.groupby("PointElm", sort=False)[c_].apply(
+                        lambda s_: float(s_.astype(float).loc[s_.astype(float).abs().idxmax()])) for c_ in comps}
+                    elems.append({"nodes": nodes, "xyz": [xyz[n] for n in nodes],
+                                  "values": {c_: [corner[c_][n] for n in first["PointElm"]] for c_ in comps}})
                 out["shells"] = elems
     if "story_charts" in views and sw == "ETABS":
         df = get("story_drifts")

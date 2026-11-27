@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.15.0 - 2026-11-27
+
+Result diagrams drawn as SAP2000, ETABS and SAFE draw them (report `result_diagrams`). No new actions; 1 new report
+parameter. Checked side by side with the programs' displays on multi-bay, multi-storey models (12 slabs, a wall,
+SAP2000 meshed at 1 m) and a SAFE example copy (tests\run_live_diagrams.bat).
+- Frame diagrams (M, V, P, T): split at the zero crossings and drawn on the tension side for moments; the moment
+  is curved between the output stations from the shear (exact for distributed loads: the 2-span test beam gives
+  9wL2/128 and wL2/8). SAP2000 reports: filled, positive blue / negative red, as SAP2000 shows them. ETABS / SAFE
+  reports: one colour, not filled, hatched across, as those programs show them by default. Values at the member
+  ends and at each peak.
+- Shell contours, slabs per level and walls per plane (new `wall_component`, default F22): values interpolated over
+  each element and coloured in bands with the program's colours and labels. SAP2000: averaged at all joints (its
+  default), round band values from max to min (e.g. 14 / 10.5 / ... / -31.5), blue = most positive ... purple = most
+  negative, vertical bar. ETABS / SAFE: not averaged (their default), a scale symmetric about zero (e.g. -32 ... 32
+  by 4; -350 ... 350 by 50), purple ... yellow below zero and green ... blue above, horizontal bar. The ranges in
+  the reports matched the programs' own min / max (ETABS M11 -31.57 / 16.58; SAP2000 max 16.42 vs 16.44). SAP2000
+  reports also give the unaveraged range.
+- Fixed: whole members were coloured by the sign of their peak, diagrams crossed themselves at zero, stations were
+  joined by straight lines only, and the contour palette was reversed with no averaging.
+
 ## 0.14.0 - 2026-11-27
 
 Phase 5 second batch and SAFE design verification. 1 new action, 3 extended.

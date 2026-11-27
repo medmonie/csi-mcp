@@ -30,14 +30,15 @@ def _fmt(v: float) -> str:
 class _View:
     """Fit 2-D points into a box (w x h, with margins), y up; equal scale on both axes."""
 
-    def __init__(self, pts2: Iterable[tuple[float, float]], w: float, h: float, margin: float = 22) -> None:
+    def __init__(self, pts2: Iterable[tuple[float, float]], w: float, h: float, margin: float = 22,
+                 y0: float = 0.0) -> None:
         pts2 = list(pts2) or [(0.0, 0.0)]
         xs, ys = [p[0] for p in pts2], [p[1] for p in pts2]
         self.x0, self.y0 = min(xs), min(ys)
         dx, dy = max(xs) - self.x0 or 1.0, max(ys) - self.y0 or 1.0
         self.s = min((w - 2 * margin) / dx, (h - 2 * margin) / dy)
         self.ox = margin + ((w - 2 * margin) - dx * self.s) / 2
-        self.oy = margin + ((h - 2 * margin) - dy * self.s) / 2
+        self.oy = y0 + margin + ((h - 2 * margin) - dy * self.s) / 2
 
     def __call__(self, x: float, y: float) -> tuple[float, float]:
         return self.ox + (x - self.x0) * self.s, self.oy + (y - self.y0) * self.s
@@ -413,14 +414,85 @@ def default_axes(p1: Pt, p2: Pt) -> tuple[Pt, Pt, Pt]:
     return e1, e2, e3
 
 
+FILL_POS, FILL_NEG = "#c5d8f6", "#f6c9c9"      # the programs: positive blue, negative red
+
+
+def _dense(series: list[tuple[float, float]], slopes: list[float] | None, k: int = 8) -> list[tuple[float, float]]:
+    """Points along a member: straight between stations, or - for a moment with the matching shear - a cubic
+    Hermite curve with dM/dx from the shear (exact for the parabola of a uniform load). A segment whose chord does
+    not agree with its end slopes (a point load at a station) stays straight."""
+    out = [series[0]]
+    for i in range(len(series) - 1):
+        (s0, m0), (s1, m1) = series[i], series[i + 1]
+        L = s1 - s0
+        if slopes is None or L <= 0:
+            out.append(series[i + 1])
+            continue
+        d0, d1 = slopes[i] * L, slopes[i + 1] * L
+        chord = m1 - m0
+        if abs(chord - (d0 + d1) / 2) > 0.02 * max(abs(m0), abs(m1), abs(d0), abs(d1), 1e-9):
+            out.append(series[i + 1])
+            continue
+        for j in range(1, k + 1):
+            t = j / k
+            h00, h10, h01, h11 = 2*t**3 - 3*t**2 + 1, t**3 - 2*t**2 + t, -2*t**3 + 3*t**2, t**3 - t**2
+            out.append((s0 + t * L, h00 * m0 + h10 * d0 + h01 * m1 + h11 * d1))
+    return out
+
+
+def _slope_sign(series: list[tuple[float, float]], shear: list[float]) -> float | None:
+    """dM/dx = sign x V (CSI's sign convention differs between M3/V2 and M2/V3): the sign that fits the chords."""
+    num = sum((m1 - m0) * (v0 + v1) / 2 for (_, m0), (_, m1), v0, v1 in zip(series, series[1:], shear, shear[1:]))
+    if abs(num) < 1e-12:
+        return None
+    return 1.0 if num > 0 else -1.0
+
+
+def _sign_runs(pts: list[tuple[float, float]]) -> list[list[tuple[float, float]]]:
+    """Split a diagram at its zero crossings (also at exact zeros): runs of one sign, each closed on the member."""
+    sgn = lambda v: (v > 0) - (v < 0)  # noqa: E731
+    runs: list[list[tuple[float, float]]] = []
+    cur, cur_s = [(pts[0][0], 0.0)], 0
+    prev = pts[0]
+    for s1, v1 in pts:
+        s_new = sgn(v1)
+        if cur_s and s_new and s_new != cur_s:
+            s0, v0 = prev
+            sz = s0 + (s1 - s0) * v0 / (v0 - v1) if v0 != v1 and v0 else s0
+            cur.append((sz, 0.0))
+            runs.append(cur)
+            cur = [(sz, 0.0)]
+        if s_new:
+            cur_s = s_new
+        cur.append((s1, v1))
+        prev = (s1, v1)
+    cur.append((pts[-1][0], 0.0))
+    runs.append(cur)
+    return [r for r in runs if max(abs(v) for _, v in r) > 0]
+
+
+ETABS_LINE, ETABS_TEXT = "#c8a200", "#6b5600"   # ETABS / SAFE draw frame diagrams in yellow lines, unfilled
+
+
+def _interp(run: list[tuple[float, float]], s: float) -> float:
+    for (s0, v0), (s1, v1) in zip(run, run[1:]):
+        if s0 - 1e-12 <= s <= s1 + 1e-12:
+            return v0 if s1 - s0 < 1e-12 else v0 + (v1 - v0) * (s - s0) / (s1 - s0)
+    return run[-1][1] if s > run[-1][0] else run[0][1]
+
+
 def frame_diagram(geo: dict[str, Any], forces: dict[str, list[tuple[float, dict[str, float]]]], axis: str, c: float,
-                  w: float, h: float, comp: str = "bending", axes: dict[str, tuple[Pt, Pt, Pt]] | None = None):
-    """Force diagram of the frames in the plane axis = c, drawn perpendicular to each member.
-    comp 'bending' = the moment that bends each member in this plane (M3 when local 3 is normal to the plane, M2
-    when local 2 is), drawn toward the member's local -2 (M3) or -3 (M2) side: for a beam with local 2 up, a
-    positive (sagging) M3 plots below the beam. Other components are drawn toward local -2 (P, V2, T, M3) or -3
-    (V3, M2) when that axis lies in the plane. Scaled so the largest value is 10 % of the plane size."""
-    from reportlab.graphics.shapes import Line, Polygon
+                  w: float, h: float, comp: str = "bending", axes: dict[str, tuple[Pt, Pt, Pt]] | None = None,
+                  style: str = "sap"):
+    """Force diagram of the frames in the plane axis = c, drawn as the programs draw it: perpendicular to each
+    member, split at the zero crossings, positive parts blue and negative parts red, the moment curved between the
+    stations from the shear. comp 'bending' = the moment that bends each member in this plane (M3 when local 3 is
+    normal to the plane, M2 when local 2 is), drawn on the member's local -2 (M3) or -3 (M2) side: the tension side
+    (a positive, sagging M3 of a beam with local 2 up plots below it). Scaled so the largest value is 10 % of the
+    plane size; values at the member ends and at the peak of each part. style 'sap' = SAP2000's look (filled,
+    positive blue / negative red); 'etabs' = ETABS / SAFE's default look (one colour, not filled, hatched with
+    lines across the diagram)."""
+    from reportlab.graphics.shapes import Line, Polygon, PolyLine
     k = 0 if axis == "x" else 1
     hor = 1 - k
     normal = (1.0, 0.0, 0.0) if axis == "x" else (0.0, 1.0, 0.0)
@@ -449,75 +521,225 @@ def frame_diagram(geo: dict[str, Any], forces: dict[str, list[tuple[float, dict[
             for st in forces.get(f["name"], [])]
     vmax = max((abs(x) for x in vals), default=0.0)
     kscale = 0.10 * plan_w / vmax if vmax > 0 else 0.0
-    # make room for the diagrams: extend the view by the largest offset
     pad = 0.10 * plan_w
     box = uv + [(u + du, z + dz) for u, z in uv for du, dz in ((pad, pad), (-pad, -pad))]
     v = _View(box, w, h, margin=26)
     d = _drawing(w, h)
     labels, used = 0, set()
+    tiny = 1e-6 * max(vmax, 1.0)
     for f in frames:
         a, b = (_p1(f)[hor], _p1(f)[2]), (_p2(f)[hor], _p2(f)[2])
-        (x1, y1), (x2, y2) = v(*a), v(*b)
-        d.add(Line(x1, y1, x2, y2, strokeColor=_c(DARK), strokeWidth=0.6))
         pk = chosen[f["name"]]
         st = sorted(forces.get(f["name"], []), key=lambda q: q[0])
-        if not pk or not st or not kscale:
-            continue
-        name, (nx, ny) = pk
-        used.add(name)
-        L = math.dist(a, b) or 1.0
-        series = [(s_, vals_.get(name, 0.0)) for s_, vals_ in st]
-        at = lambda s_, val: (a[0] + (b[0] - a[0]) * min(max(s_ / L, 0.0), 1.0) + nx * val * kscale,  # noqa: E731
-                              a[1] + (b[1] - a[1]) * min(max(s_ / L, 0.0), 1.0) + ny * val * kscale)
-        poly = [*v(*a)] + [c_ for s_, val in series for c_ in v(*at(s_, val))] + [*v(*b)]
-        peak = max(series, key=lambda q: abs(q[1]))
-        d.add(Polygon(poly, fillColor=_c("#fde2e2" if peak[1] < 0 else "#dbe8fb"),
-                      strokeColor=_c(NEG if peak[1] < 0 else POS), strokeWidth=0.5))
-        if labels < LABEL_CAP:
-            for s_, val in {series[0], series[-1], peak}:
-                if abs(val) < 1e-6 * max(vmax, 1.0):
-                    continue
-                x, y = v(*at(s_, val))
-                _text(d, x, y + 1.5, _fmt(val), 4.6, NEG if val < 0 else POS)
-                labels += 1
+        if pk and st and kscale:
+            name, (nx, ny) = pk
+            used.add(name)
+            L = math.dist(a, b) or 1.0
+            series = [(s_, vals_.get(name, 0.0)) for s_, vals_ in st]
+            slopes = None
+            if name in ("M3", "M2") and len(series) > 1:
+                shear = [vals_.get("V2" if name == "M3" else "V3", 0.0) for _, vals_ in st]
+                sgn = _slope_sign(series, shear)
+                slopes = [sgn * x for x in shear] if sgn else None
+            pts = _dense(series, slopes)
+            at = lambda s_, val: (a[0] + (b[0] - a[0]) * min(max(s_ / L, 0.0), 1.0) + nx * val * kscale,  # noqa: E731
+                                  a[1] + (b[1] - a[1]) * min(max(s_ / L, 0.0), 1.0) + ny * val * kscale)
+            etabs = style == "etabs"
+            lab = lambda val: ETABS_TEXT if etabs else (POS if val > 0 else NEG)  # noqa: E731
+            for run in _sign_runs(pts):
+                pos = max(run, key=lambda q: abs(q[1]))[1] > 0
+                if etabs:
+                    n_h = max(int(12 * (run[-1][0] - run[0][0]) / L), 2)
+                    for i in range(n_h + 1):
+                        s_ = run[0][0] + (run[-1][0] - run[0][0]) * i / n_h
+                        val = _interp(run, s_)
+                        if abs(val) > tiny:
+                            d.add(Line(*v(*at(s_, 0.0)), *v(*at(s_, val)), strokeColor=_c(ETABS_LINE),
+                                       strokeWidth=0.35))
+                else:
+                    d.add(Polygon([c_ for s_, val in run for c_ in v(*at(s_, val))],
+                                  fillColor=_c(FILL_POS if pos else FILL_NEG), strokeColor=None))
+                d.add(PolyLine([c_ for s_, val in (run if etabs else run[1:-1]) for c_ in v(*at(s_, val))],
+                               strokeColor=_c(ETABS_LINE if etabs else POS if pos else NEG), strokeWidth=0.6))
+                if labels < LABEL_CAP:
+                    peak = max(run, key=lambda q: abs(q[1]))
+                    x, y = v(*at(*peak))
+                    _text(d, x, y + 1.5, _fmt(peak[1]), 4.6, lab(peak[1]))
+                    labels += 1
+            for s_, val in (series[0], series[-1]):
+                if labels < LABEL_CAP and abs(val) > tiny and abs(val) < 0.98 * max(abs(q[1]) for q in pts):
+                    x, y = v(*at(s_, val))
+                    _text(d, x, y + 1.5, _fmt(val), 4.6, lab(val))
+                    labels += 1
+        (x1, y1), (x2, y2) = v(*a), v(*b)
+        d.add(Line(x1, y1, x2, y2, strokeColor=_c(DARK), strokeWidth=0.6))
     what = "/".join(sorted(used)) or comp
-    _legend(d, w, [(POS, f"{what} positive"), (NEG, f"{what} negative")])
+    if style == "etabs":
+        _legend(d, w, [(ETABS_LINE, f"{what} (on the tension side for moments)")])
+    else:
+        _legend(d, w, [(POS, f"{what} positive"), (NEG, f"{what} negative")])
     _scale_note(d, w, f"largest |{what}| {_fmt(vmax)}")
     return d, vmax, what
 
 
-def shell_contour(elements: list[tuple[list[tuple[float, float]], float]], comp: str, w: float, h: float):
-    """Element-by-element colour map (blue = most negative, red = most positive) with a colour bar."""
+# The programs' contour colours, most positive band first (read off SAP2000 27's colour bar: dark blue, blue, light
+# blue, cyan, greens, yellow, orange, reds, purple for the most negative band)
+CSI_BANDS = ["#0000c8", "#0000ff", "#3c78ff", "#00ffff", "#00ff00", "#00c800", "#96f000", "#ffff00", "#ffc800",
+             "#ff9600", "#ff6400", "#ff0000", "#e10000", "#be0028", "#a000a0"]
+
+
+def contour_levels(lo: float, hi: float, target: int = 14) -> list[float]:
+    """Band boundaries as the programs label them: multiples of a round step (about (hi - lo) / 14), inside
+    [lo, hi], largest first. SAP2000 showed 14 / 10.5 / ... / -31.5 for M11 from -33.7 to 16.44."""
+    if hi - lo < 1e-12:
+        return [hi]
+    raw = (hi - lo) / target
+    mag = 10 ** math.floor(math.log10(raw))
+    step = min((m * mag for m in (1, 1.2, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8, 10)), key=lambda x: abs(x - raw))
+    top, bot = math.floor(hi / step + 1e-9), math.ceil(lo / step - 1e-9)
+    return [round(i * step, 10) for i in range(top, bot - 1, -1)]
+
+
+# ETABS / SAFE colour bar, most negative first (read off ETABS 23 and SAFE 23): purple, reds, oranges, yellow just
+# below zero, green just above zero, light greens, cyan, blues; the scale is symmetric about zero
+ETABS_NEG = ["#9600b4", "#c80032", "#ff0000", "#ff4600", "#ff8200", "#ffbe00", "#ffff00"]
+ETABS_POS = ["#00dc00", "#46f000", "#96ff32", "#00ffaa", "#00ffff", "#3c8cff", "#0000ff"]
+
+
+def symmetric_levels(lo: float, hi: float, target: int = 14) -> list[float]:
+    """ETABS / SAFE band boundaries: symmetric about zero, +-A where A is the largest magnitude rounded up to a
+    round step (the smallest of 1, 2, 2.5, 4, 5 x 10^n giving at most 8 bands a side) (ETABS showed -32 ... 32 by 4 for M11 from -31.6 to 16.6; SAFE -350 ... 350 by
+    50). Smallest first."""
+    a = max(abs(lo), abs(hi))
+    if a < 1e-12:
+        return [0.0]
+    half = target // 2 + 1                                 # at most 8 bands each side
+    mag = 10 ** math.floor(math.log10(a / half))
+    step = next(m * mag for m in (1, 2, 2.5, 4, 5, 10, 20) if math.ceil(a / (m * mag) - 1e-9) <= half)
+    n = math.ceil(a / step - 1e-9)
+    return [round(i * step, 10) for i in range(-n, n + 1)]
+
+
+def _etabs_colors(nbands: int) -> list[str]:
+    half = nbands // 2
+
+    def pick(pal: list[str], m: int) -> list[str]:
+        return [pal[round(i * (len(pal) - 1) / max(m - 1, 1))] for i in range(m)] if m else []
+    return pick(ETABS_NEG, half) + pick(ETABS_POS, nbands - half)
+
+
+def _band_colors(n: int) -> list[str]:
+    if n <= len(CSI_BANDS):
+        idx = [round(i * (len(CSI_BANDS) - 1) / max(n - 1, 1)) for i in range(n)]
+        return [CSI_BANDS[i] for i in idx]
+    return [CSI_BANDS[min(int(i * len(CSI_BANDS) / n), len(CSI_BANDS) - 1)] for i in range(n)]
+
+
+def _band_of(val: float, levels: list[float]) -> int:
+    """0 = above the highest boundary ... len(levels) = below the lowest."""
+    for i, b in enumerate(levels):
+        if val > b:
+            return i
+    return len(levels)
+
+
+def joint_average(elements: list[dict[str, Any]]) -> dict[str, float]:
+    """Average of the element-corner values at each joint (the programs' default 'averaging at all joints')."""
+    acc: dict[str, list[float]] = defaultdict(list)
+    for e in elements:
+        for n, val in zip(e["nodes"], e["vals"]):
+            acc[n].append(val)
+    return {n: sum(v) / len(v) for n, v in acc.items()}
+
+
+def _sub_cells(poly: list[tuple[float, float]], vals: list[float], k: int):
+    """Split a triangle / quad into k x k cells with bilinear (or linear) values at the cell centres."""
+    if len(poly) == 4:
+        def at(u, v):
+            w_ = ((1 - u) * (1 - v), u * (1 - v), u * v, (1 - u) * v)
+            return (sum(wi * p[0] for wi, p in zip(w_, poly)), sum(wi * p[1] for wi, p in zip(w_, poly)),
+                    sum(wi * x for wi, x in zip(w_, vals)))
+        for i in range(k):
+            for j in range(k):
+                c = [at((i + di) / k, (j + dj) / k) for di, dj in ((0, 0), (1, 0), (1, 1), (0, 1))]
+                yield [(p[0], p[1]) for p in c], at((i + 0.5) / k, (j + 0.5) / k)[2]
+    elif len(poly) == 3:
+        def at(a, b):
+            w_ = (1 - a - b, a, b)
+            return (sum(wi * p[0] for wi, p in zip(w_, poly)), sum(wi * p[1] for wi, p in zip(w_, poly)),
+                    sum(wi * x for wi, x in zip(w_, vals)))
+        for i in range(k):
+            for j in range(k - i):
+                tri = [at(i / k, j / k), at((i + 1) / k, j / k), at(i / k, (j + 1) / k)]
+                yield [(p[0], p[1]) for p in tri], sum(p[2] for p in tri) / 3
+                if i + j < k - 1:
+                    tri = [at((i + 1) / k, j / k), at((i + 1) / k, (j + 1) / k), at(i / k, (j + 1) / k)]
+                    yield [(p[0], p[1]) for p in tri], sum(p[2] for p in tri) / 3
+    else:
+        yield poly, sum(vals) / len(vals)
+
+
+def shell_contour(elements: list[dict[str, Any]], comp: str, w: float, h: float, averaged: bool | None = None,
+                  style: str = "sap"):
+    """Contour of a shell component over one plane: elements = [{'poly': [(u, v)...], 'nodes': [...],
+    'vals': [corner values]}], interpolated over each element and coloured in bands as the program shows it.
+    style 'sap' = SAP2000 (values averaged at the joints, bands between round values from max to min, blue = most
+    positive ... purple = most negative, vertical bar at the right); 'etabs' = ETABS / SAFE (no averaging, a scale
+    symmetric about zero: purple ... yellow below zero, green ... blue above, horizontal bar at the bottom).
+    averaged None = the program's default."""
     from reportlab.graphics.shapes import Polygon, Rect
     if not elements:
         return _drawing(w, h), (0.0, 0.0)
-    v = _View([p for poly, _ in elements for p in poly], w, h - 18, margin=24)
-    d = _drawing(w, h)
-    vals = [val for _, val in elements]
+    etabs = style == "etabs"
+    if averaged is None:
+        averaged = not etabs
+    avg = joint_average(elements) if averaged else None
+    for e in elements:
+        e["use"] = [avg[n] for n in e["nodes"]] if avg else e["vals"]
+    vals = [x for e in elements for x in e["use"]]
     lo, hi = min(vals), max(vals)
-    for poly, val in elements:
-        d.add(Polygon([c for p in poly for c in v(*p)], fillColor=_ramp(val, lo, hi), strokeColor=_c("#ffffff"),
-                      strokeWidth=0.15))
-    bx, by, bw = 10, h - 14, min(200, w - 20)
-    for i in range(40):
-        d.add(Rect(bx + i * bw / 40, by, bw / 40 + 0.3, 6, fillColor=_ramp(lo + (hi - lo) * i / 39, lo, hi),
-                   strokeColor=None))
-    _text(d, bx, by - 6, _fmt(lo), 5.5, DARK, "start")
-    _text(d, bx + bw, by - 6, _fmt(hi), 5.5, DARK, "end")
-    _text(d, bx + bw + 6, by, comp + " (average of element nodes)", 5.5, DARK, "start")
+    if etabs:
+        bounds = symmetric_levels(lo, hi)                  # ascending
+        cols = [_c(x) for x in _etabs_colors(max(len(bounds) - 1, 1))]
+
+        def band(val: float) -> int:
+            for i in range(1, len(bounds) - 1):
+                if val < bounds[i]:
+                    return i - 1
+            return len(cols) - 1
+        v = _View([p for e in elements for p in e["poly"]], w - 4, h - 34, margin=16, y0=30)
+    else:
+        levels = contour_levels(lo, hi)                   # descending
+        cols = [_c(x) for x in _band_colors(len(levels) + 1)]
+        band = lambda val: _band_of(val, levels)          # noqa: E731
+        v = _View([p for e in elements for p in e["poly"]], w - 46, h - 4, margin=18)
+    d = _drawing(w, h)
+    k = 4 if len(elements) < 400 else 2 if len(elements) < 2500 else 1
+    for e in elements:
+        for cell, val in _sub_cells(e["poly"], e["use"], k):
+            col = cols[band(val)]
+            d.add(Polygon([c for p in cell for c in v(*p)], fillColor=col, strokeColor=col, strokeWidth=0.2))
+        if len(elements) <= 800:            # mesh lines; left out on very fine meshes, where they would hide the colours
+            d.add(Polygon([c for p in e["poly"] for c in v(*p)], fillColor=None, strokeColor=_c("#3a3a3a"),
+                          strokeWidth=0.15))
+    n = len(cols)
+    if etabs:
+        bw = min(w - 60, 26 * n)
+        bx, by = (w - bw) / 2, 10
+        for i, col in enumerate(cols):
+            d.add(Rect(bx + i * bw / n, by, bw / n, 8, fillColor=col, strokeColor=None))
+        for i, lev in enumerate(bounds):
+            _text(d, bx + i * bw / n, by - 6, _fmt(lev), 4.6, DARK)
+        _text(d, bx - 14, by + 2, comp, 5.5, DARK)
+    else:
+        bx, bh = w - 40, min(h - 30, 13 * n)
+        by = (h - bh) / 2
+        for i, col in enumerate(cols):
+            d.add(Rect(bx, by + bh - (i + 1) * bh / n, 8, bh / n, fillColor=col, strokeColor=None))
+        for i, lev in enumerate(levels):
+            _text(d, bx + 10, by + bh - (i + 1) * bh / n - 2, _fmt(lev), 4.6, DARK, "start")
+        _text(d, bx + 4, by + bh + 5, comp, 5.5, DARK)
     return d, (lo, hi)
-
-
-def _ramp(val: float, lo: float, hi: float):
-    from reportlab.lib import colors
-    t = 0.5 if hi - lo < 1e-12 else (val - lo) / (hi - lo)
-    stops = [(0.0, (0.13, 0.30, 0.75)), (0.25, (0.30, 0.65, 0.95)), (0.5, (0.55, 0.85, 0.45)),
-             (0.75, (0.98, 0.80, 0.25)), (1.0, (0.85, 0.18, 0.15))]
-    for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
-        if t <= t1:
-            f = (t - t0) / (t1 - t0)
-            return colors.Color(*(a + (b - a) * f for a, b in zip(c0, c1)))
-    return colors.Color(*stops[-1][1])
 
 
 def story_chart(rows: list[dict[str, Any]], value: str, title: str, w: float, h: float, limit: float | None = None):
