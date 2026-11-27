@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.1 - 2026-11-27
+
+- Shell contours are smooth and continuous like the programs' displays: each element is split into linear triangles
+  (quads with bilinear values on a 3 x 3 / 2 x 2 grid) and each triangle is clipped exactly at the band boundaries,
+  so the band edges run straight across the elements instead of in steps. Mesh lines are left out above 800
+  elements per view.
+- tests\run_live_diagrams_b.bat (live_diagrams.py --out=<folder>): writes to another folder while the models of
+  the last run are open in the programs.
+
 ## 0.15.0 - 2026-11-27
 
 Result diagrams drawn as SAP2000, ETABS and SAFE draw them (report `result_diagrams`). No new actions; 1 new report

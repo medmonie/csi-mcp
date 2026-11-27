@@ -1,4 +1,4 @@
-# CSI MCP actions (server 0.15.0)
+# CSI MCP actions (server 0.15.1)
 
 One MCP server per program since 0.7.0; each lists only what its program's API can do:
 

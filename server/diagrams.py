@@ -679,6 +679,65 @@ def _sub_cells(poly: list[tuple[float, float]], vals: list[float], k: int):
         yield poly, sum(vals) / len(vals)
 
 
+def _triangles(poly: list[tuple[float, float]], vals: list[float], k: int):
+    """Triangles (x, y, value) covering an element: a quad as a k x k grid of bilinear values, each cell in two
+    triangles; a triangle as is; other polygons fanned from their centroid."""
+    if len(poly) == 4:
+        def at(u, v):
+            w_ = ((1 - u) * (1 - v), u * (1 - v), u * v, (1 - u) * v)
+            return (sum(wi * p[0] for wi, p in zip(w_, poly)), sum(wi * p[1] for wi, p in zip(w_, poly)),
+                    sum(wi * x for wi, x in zip(w_, vals)))
+        g = [[at(i / k, j / k) for j in range(k + 1)] for i in range(k + 1)]
+        for i in range(k):
+            for j in range(k):
+                a, b, c, d = g[i][j], g[i + 1][j], g[i + 1][j + 1], g[i][j + 1]
+                yield (a, b, c)
+                yield (a, c, d)
+    elif len(poly) == 3:
+        yield tuple((p[0], p[1], x) for p, x in zip(poly, vals))
+    elif len(poly) > 4:
+        cx, cy = sum(p[0] for p in poly) / len(poly), sum(p[1] for p in poly) / len(poly)
+        cv = sum(vals) / len(vals)
+        for i in range(len(poly)):
+            j = (i + 1) % len(poly)
+            yield ((poly[i][0], poly[i][1], vals[i]), (poly[j][0], poly[j][1], vals[j]), (cx, cy, cv))
+
+
+def _clip(pts: list[tuple[float, float, float]], level: float, keep_above: bool):
+    """Clip a polygon with linearly varying value to value >= level (or <= level)."""
+    out = []
+    n = len(pts)
+    for i in range(n):
+        p, q = pts[i], pts[(i + 1) % n]
+        pin = p[2] >= level if keep_above else p[2] <= level
+        qin = q[2] >= level if keep_above else q[2] <= level
+        if pin:
+            out.append(p)
+        if pin != qin and abs(q[2] - p[2]) > 1e-300:
+            t = (level - p[2]) / (q[2] - p[2])
+            out.append((p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1]), level))
+    return out
+
+
+def _iso_bands(tri, bounds: list[float]):
+    """Split a linear triangle into iso-bands: yields (band index, polygon) for bounds ascending (band i between
+    bounds[i] and bounds[i + 1]; below the first / above the last go to the end bands)."""
+    vs = [p[2] for p in tri]
+    lo_b = max(0, next((i for i in range(len(bounds) - 1) if min(vs) < bounds[i + 1]), len(bounds) - 2))
+    for i in range(lo_b, len(bounds) - 1):
+        lo = bounds[i] if i > 0 else -math.inf
+        hi = bounds[i + 1] if i < len(bounds) - 2 else math.inf
+        if max(vs) < lo:
+            break
+        poly = list(tri)
+        if lo != -math.inf:
+            poly = _clip(poly, lo, True)
+        if len(poly) >= 3 and hi != math.inf:
+            poly = _clip(poly, hi, False)
+        if len(poly) >= 3:
+            yield i, poly
+
+
 def shell_contour(elements: list[dict[str, Any]], comp: str, w: float, h: float, averaged: bool | None = None,
                   style: str = "sap"):
     """Contour of a shell component over one plane: elements = [{'poly': [(u, v)...], 'nodes': [...],
@@ -702,23 +761,27 @@ def shell_contour(elements: list[dict[str, Any]], comp: str, w: float, h: float,
         bounds = symmetric_levels(lo, hi)                  # ascending
         cols = [_c(x) for x in _etabs_colors(max(len(bounds) - 1, 1))]
 
-        def band(val: float) -> int:
-            for i in range(1, len(bounds) - 1):
-                if val < bounds[i]:
-                    return i - 1
-            return len(cols) - 1
         v = _View([p for e in elements for p in e["poly"]], w - 4, h - 34, margin=16, y0=30)
     else:
         levels = contour_levels(lo, hi)                   # descending
         cols = [_c(x) for x in _band_colors(len(levels) + 1)]
-        band = lambda val: _band_of(val, levels)          # noqa: E731
         v = _View([p for e in elements for p in e["poly"]], w - 46, h - 4, margin=18)
     d = _drawing(w, h)
-    k = 4 if len(elements) < 400 else 2 if len(elements) < 2500 else 1
+    # exact iso-bands: each element in linear triangles, each triangle clipped at the band boundaries, so the band
+    # edges run straight and continuous across the elements as in the programs' displays
+    if etabs:
+        edges = bounds
+    else:
+        edges = list(reversed(levels))
+        edges = [min(lo, edges[0]) - 1.0] + edges + [max(hi, edges[-1]) + 1.0]
+    k = 3 if len(elements) < 400 else 2 if len(elements) < 3000 else 1
+    nb = len(cols)
     for e in elements:
-        for cell, val in _sub_cells(e["poly"], e["use"], k):
-            col = cols[band(val)]
-            d.add(Polygon([c for p in cell for c in v(*p)], fillColor=col, strokeColor=col, strokeWidth=0.2))
+        for tri in _triangles(e["poly"], e["use"], k):
+            for i, poly in _iso_bands(tri, edges):
+                col = cols[i] if etabs else cols[nb - 1 - i]
+                d.add(Polygon([c for p in poly for c in v(p[0], p[1])], fillColor=col, strokeColor=col,
+                              strokeWidth=0.4))
         if len(elements) <= 800:            # mesh lines; left out on very fine meshes, where they would hide the colours
             d.add(Polygon([c for p in e["poly"] for c in v(*p)], fillColor=None, strokeColor=_c("#3a3a3a"),
                           strokeWidth=0.15))

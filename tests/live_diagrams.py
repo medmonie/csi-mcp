@@ -20,6 +20,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "results" / "diagrams_output"
+_out = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--out=")), None)
+if _out:                                   # --out=<folder name> under tests\results (e.g. while a model is open)
+    OUT = OUT.parent / _out
 os.environ["CSI_MCP_OUTPUT"] = str(OUT)
 
 from live_common import FAILED, bridge, check, com, finish, show  # noqa: E402,I001
