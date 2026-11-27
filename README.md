@@ -16,7 +16,7 @@ program**, each with one tool named after it: **`etabs(action, params)`, `sap200
 | ETABS | 23.2.0 | OK | OK |
 | SAFE | 23.3.2 | OK | OK |
 
-Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.21.0
+Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.22.0
 (roadmap Phases 0-2 with V1 verification: 238 / 238 values match CSI's published results: foundation, full model read, results depth; report stages R1-R3; Phase 3 first batch:
 area mesh, joint patterns, area loads; 0.7.0: one server per program; 0.8.0: definitions - materials, sections,
 springs, patterns, cases, combinations, mass source; 0.9.0: objects - points, frames, areas, their assignments,
@@ -25,7 +25,9 @@ complete; 0.11.0: V2 - three CSI examples rebuilt through the actions alone matc
 analysis options, frame point loads, line springs; 0.12.0: Phase 4 - database-table editing, geometry operations,
 new models and models from a JSON / XLSX spec; 0.13.0: Phase 6 - design with the program's own engines
 (configure, run, results as tables, charts and D/C diagrams; V4: CSI's ETABS design examples match) and Phase 5 first
-batch - ETABS stories, diaphragms, piers / spandrels, ASCE 7-16 automatic seismic loads, links); next: rest of Phase 5.
+batch - ETABS stories, diaphragms, piers / spandrels, ASCE 7-16 automatic seismic loads, links; Phase 5 completed in
+0.19.0; 0.20.0 Word / RTF reports and tables to Excel; Phase 8: 0.21.0 frame rebar, 0.22.0 Section Designer and
+non-prismatic sections, ETABS staged construction and ETABS design combinations).
 
 ## Install
 
@@ -192,7 +194,8 @@ one automatically when the rows are cut to `max_rows`, or always with `export: c
 | `tests\run_live_sap5.bat [--hidden]` | 0.19.0: SAP2000 cable (catenary H), solids (P h / E A), tendon in a beam (P e) | `tests\results\live_sap5.txt` |
 | `tests\run_live_sap5c.bat [--hidden]` | 0.19.0: SAP2000 staged construction (w L^2/16), ASCE 41-17 hinge + pushover (Z Fye), H20-44 moving load (influence line) | `tests\results\live_sap5c.txt` |
 | `tests\run_live_word.bat [--hidden]` | 0.20.0: export_report as docx / rtf / pdf and export_tables_to_excel on an analysed SAP2000 frame, opened by Word and Excel through COM | `tests\results\live_word.txt` |
-| `tests\run_live_rebar.bat [SAP2000] [ETABS] [SAFE] [--hidden]` | 0.21.0: set_frame_rebar (rectangular tied / circular spiral columns, beams) read back in all three; SAP2000 ACI 318-19 column check under axial load = Pu / phi Pn,max | `tests\results\live_rebar.txt` |
+| `tests\run_live_rebar.bat [SAP2000] [ETABS] [SAFE] [--hidden]` | 0.21.0: set_frame_rebar (rectangular tied / circular spiral columns, beams) read back in all three; SAP2000 and (0.22.0) ETABS ACI 318-19 column check under axial load = Pu / phi Pn,max | `tests\results\live_rebar.txt` |
+| `tests\run_live_sections.bat [SAP2000] [ETABS] [SAFE] [--hidden]` | 0.22.0: non-prismatic tapered cantilever deflection (SAP2000, ETABS) = hand integral; Section Designer tee / I / polygon properties by hand and an SD column check (SAP2000; ETABS through its tables); ETABS staged construction M = w L^2 / 16 | `tests\results\live_sections.txt` |
 | `tests\run_verify_v4.bat [--hidden]` | V4: copies of CSI's ETABS design examples (ACI 318-19 Ex001 / Ex002, AISC 360-16 Ex001 / Ex002) designed through the actions with the code and combinations they hold, compared with CSI's published values; design report per example | `tests\results\verify_v4.txt`, `tests\results\verify\v4\` |
 | `tests\run_verify_v1.bat [..] [--hidden] [--only "Example 1-001"]` | V1: 38 of CSI's own verification models (copies) analysed and read through the MCP, 238 values compared with CSI's published program values (needs the "CSI Solved Examples" folder; expected values in `tests\verify\expected_v1.py`, local only) | `tests\results\verify_v1.txt`, `tests\results\verify\v1_results.csv` |
 | `tests\run_verify_v2.bat [SAP2000] [ETABS] [SAFE] [--hidden]`, `run_verify_v2_safe.bat` | V2: copies of SAP2000 1-001, ETABS Ex 01 and SAFE S03a read with `export_model_snapshot`, rebuilt in a blank model with the edit actions only, analysed and graded against CSI's published values; every raw API difference original -> rebuilt listed | `tests\results\verify_v2.txt`, `tests\results\verify\v2\` |

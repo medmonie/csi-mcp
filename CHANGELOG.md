@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.22.0 - 2026-11-27
+
+Roadmap 8.4 (Section Designer and non-prismatic sections), staged construction in ETABS, and the ETABS design
+combination fix. 2 new actions, 2 extended, 1 fix.
+- Fix: ETABS concrete frame (and shear wall) design combinations. ETABS 23.2 has `SetComboStrength` but no
+  `GetComboStrength` there (type-library dump), so a selection made through `set_design_settings` read back as not
+  selected and `run_design` refused. The selection is now read from the program's table '<Kind> Design Load
+  Combination Data' (rows ComboType / ComboName). Measured: the selection is kept, and also deselected, through
+  SetComboStrength; ETABS lists the table once the model has members of that kind (a selection made before shows
+  then). With no such members yet, `set_design_settings` says the selection cannot be confirmed yet instead of
+  failing. Checked: ETABS column, ACI 318-19, axial load only - PMM ratio 0.7000 against Pu / phi Pn,max = 0.7000,
+  designed with the selected combination.
+- `define_nonprismatic_section` (ETABS, SAP2000, SAFE): segments from the I to the J end, each from a start to an
+  end section over an absolute or variable length, with the EI33 / EI22 variation (linear, parabolic, cubic) - through
+  PropFrame.SetNonPrismatic, read back with GetNonPrismatic. Checked: cantilever L = 4 m, 0.3 m wide, 0.8 m deep
+  tapering to 0.4 m (EI33 cubic), tip load 100 kN - tip deflection 11.170 mm in SAP2000 and ETABS against the hand
+  integral of bending and shear 11.170 mm. SAFE: read back.
+- `define_section_designer_section` (SAP2000, ETABS): Section Designer sections from the designer's shapes and bars,
+  at their coordinates (x along local 2, y along local 3; measured: I33 is about the horizontal axis), with the design
+  type (none, general steel, concrete column check / design); answers with the shapes and the section properties.
+  SAP2000 through PropFrameSDShape: solid rectangles, circles, polygons (optionally reinforced: edge / corner bars,
+  circular bars), steel I / tee / angle / channel / tube / pipe / plate, single / line / circular bars. ETABS 23.2 has
+  no shape setters (SetSDSection returns 1 - measured), so the section row and its shapes go through its tables
+  'Frame Section Property Definitions - Section Designer' and 'Section Designer Shapes - ...' in ONE import (a shape
+  imported apart from its section row is refused on 'Section Name' - measured): concrete rectangles and circles, steel
+  I / tube / pipe / plate, single / line / circular bars. Not in ETABS: polygons (its polygon import fails inside the
+  program with return code 1 and no log, leaves a broken shape, and blocks the next imports - measured), bars inside
+  a solid shape (draw them as bar shapes), steel tee / angle / channel. SAFE has no setters and no such tables:
+  Section Designer sections are read back only.
+  Checked (SAP2000 and ETABS): a T of two rectangles - area 0.3800 m2, I33 0.021225 m4, I22 0.018017 m4 equal to the
+  hand values; an I shape's area; SAP2000: an L polygon's area, a reinforced circle read back, and a 0.4 x 0.4 m
+  column of one rectangle and 8 single 25M bars checked to ACI 318-19 - PMM ratio 0.7000 against 0.7000.
+  ETABS draws a circle as a polygon: its area is 0.6 % under pi d^2 / 4 (measured).
+- ETABS 23.2 limit (measured): a Section Designer concrete column stored 'Designed? = No' is still reported by its
+  concrete frame design as designed (DesignOpt 'Design', no PMM ratio, As = the drawn bars); the action says so.
+- `define_staged_construction` now also in ETABS (the typed StaticNonlinearStaged calls exist there). Checked: two
+  spans of 8 m, span 2 added in stage 2 - M_B = 39.84 kN m against w L^2 / 16 = 40 (one-shot 79.68 against 80).
+- `get_definition_details` frame_sections: non-prismatic segments, Section Designer shapes and the section
+  properties.
+- Table edits: several tables can be set and applied in one import (`write_tables`); a refused import with a
+  non-zero return code now reports the program's log lines.
+- Tests: tests/live_sections.py (+ run_live_sections.bat); live_rebar.py now also checks the ETABS column design;
+  diagnostics diag_sd_tables*.py (the ETABS Section Designer tables).
+
 ## 0.21.0 - 2026-11-27
 
 Roadmap 8.3: reinforcement on concrete frame sections. 1 new action, 2 extended, 1 fix.

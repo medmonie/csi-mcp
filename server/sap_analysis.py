@@ -63,7 +63,7 @@ class StagedP(_EditP):
 @action("define_staged_construction", "Create or change a nonlinear staged-construction load case: stages with "
         "duration and operations (add / remove structure by group with age, load patterns on new or all objects of a "
         "group, section / modifier / release changes), geometric nonlinearity, initial case. Answers with the stages "
-        "read back.", "Definitions", "edit", StagedP, programs="S")
+        "read back.", "Definitions", "edit", StagedP, programs="ES")
 def define_staged_construction(p: StagedP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
     cases = bridge.try_name_list(sap, ["LoadCases"])[0] or []

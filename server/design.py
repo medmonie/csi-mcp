@@ -90,9 +90,21 @@ def _one_table(sap: Any, kind: str, code: str | None, what: str) -> dict[str, An
     return ts[0]
 
 
-def _combos(sap: Any, kind: str) -> dict[str, list[str]]:
+def combo_table(sap: Any, kind: str) -> str | None:
+    """ETABS keeps concrete-frame and shear-wall design combinations only in '<Kind> Design Load Combination Data'
+    (measured, ETABS 23.2: no GetComboStrength there). The program lists the table once the model has members of
+    that kind; a selection made before is kept and shows then."""
+    words = TABLE_WORDS[kind]
+    for t in bridge.available_tables(sap):
+        k = t["key"].lower()
+        if "load combination data" in k and any(w in k for w in words):
+            return t["key"]
+    return None
+
+
+def _combos(sap: Any, kind: str) -> dict[str, Any]:
     obj = _design(sap, kind)
-    out = {}
+    out: dict[str, Any] = {}
     for label, meth in (("strength", "GetComboStrength"), ("deflection", "GetComboDeflection")):
         if hasattr(obj, meth):
             try:
@@ -100,6 +112,27 @@ def _combos(sap: Any, kind: str) -> dict[str, list[str]]:
                 out[label] = [str(x) for x in as_list(o[1])]
             except (CSIError, COMError, IndexError, TypeError):
                 pass
+    if "strength" not in out and hasattr(obj, "SetComboStrength"):
+        key = combo_table(sap, kind)
+        if key is None:
+            out["strength"] = []
+            out["note"] = (f"The program lists the {kind.replace('_', ' ')} design combinations once the model has "
+                           "members of that kind; none can be read yet.")
+            out["unconfirmed"] = True
+        else:
+            try:
+                _, _, rows = read_table(sap, key)
+            except (CSIError, COMError) as exc:
+                out["strength"] = []
+                out["note"], out["unconfirmed"] = f"'{key}' could not be read: {str(exc)[:200]}", True
+            else:
+                out["strength"] = []
+                for r in rows:
+                    label = (r.get("ComboType") or "strength").strip().lower() or "strength"
+                    out.setdefault(label, [])
+                    if r.get("ComboName"):
+                        out[label].append(str(r["ComboName"]))
+                out["source"] = key
     return out
 
 
@@ -282,12 +315,17 @@ def set_design_settings(p: DesignSetP) -> dict[str, Any]:
             done["overwrites_import"] = {**write_table(sap, key, version, fields, rows), "rows_changed": changed,
                                          "table": key}
     after = read_settings(sap, p.software, p.kind, p.units)
-    for label, sel in (("strength", p.strength_combinations), ("deflection", p.deflection_combinations)):
-        for name, on in (sel or {}).items():
-            if (name in after["combinations"].get(label, [])) != bool(on):
-                raise CSIValidationError(f"{label} combination '{name}' reads back as "
-                                         f"{'selected' if not on else 'not selected'}.")
-    return {**plan, "done": done, "settings_now": after, **({"snapshot": snap} if snap else {})}
+    extra: dict[str, Any] = {}
+    if after["combinations"].get("unconfirmed") and (p.strength_combinations or p.deflection_combinations):
+        # ETABS: SetComboStrength took the selection (returned 0) but there is nothing to read it from yet
+        extra["combinations_not_confirmed"] = after["combinations"].get("note")
+    else:
+        for label, sel in (("strength", p.strength_combinations), ("deflection", p.deflection_combinations)):
+            for name, on in (sel or {}).items():
+                if (name in after["combinations"].get(label, [])) != bool(on):
+                    raise CSIValidationError(f"{label} combination '{name}' reads back as "
+                                             f"{'selected' if not on else 'not selected'}.")
+    return {**plan, "done": done, "settings_now": after, **extra, **({"snapshot": snap} if snap else {})}
 
 
 # --------------------------------------------------------------------------- run

@@ -918,4 +918,5 @@ import sap_analysis  # noqa: E402,F401 - registers staged construction, hinges, 
 import results  # noqa: E402,F401 - registers the Phase 2 results actions
 import report  # noqa: E402,F401 - registers export_report (report.py builds on the actions above)
 import rebar  # noqa: E402,F401 - registers set_frame_rebar
+import sections  # noqa: E402,F401 - registers non-prismatic and Section Designer sections
 import excel_export  # noqa: E402,F401 - registers export_tables_to_excel

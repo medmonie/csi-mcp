@@ -1773,3 +1773,80 @@ def test_selection_fallback_signature_after_nonzero_code():
     sap = SimpleNamespace(DatabaseTables=SimpleNamespace(SetLoadCasesSelectedForDisplay=setter))
     csi_bridge.CSIBridge()._set_selected(sap, "SetLoadCasesSelectedForDisplay", ["Dead"])
     assert seen == [1, 2]
+
+
+def test_022_etabs_concrete_design_combinations_read_from_table():
+    from fake_csi import _DesignConcreteEtabs
+    sap = fresh("ETABS")
+    sap.DesignConcrete = _DesignConcreteEtabs(sap, "ACI 318-19")
+    combo = sap.RespCombo.names[0]
+    r = call("set_design_settings", {"software": "ETABS", "kind": "concrete_frame",
+                                     "strength_combinations": {combo: True}})
+    assert "_error" not in r, r
+    c = r["settings_now"]["combinations"]
+    assert c["strength"] == [combo] and c["source"] == "Concrete Frame Design Load Combination Data"
+    r = call("set_design_settings", {"software": "ETABS", "kind": "concrete_frame",
+                                     "strength_combinations": {combo: False}})
+    assert "_error" not in r and r["settings_now"]["combinations"]["strength"] == [], r
+    sap.locked = True
+    r = call("run_design", {"software": "ETABS", "kind": "concrete_frame"})
+    assert r["_error"] and "combinations" in r["message"]
+    call("set_design_settings", {"software": "ETABS", "kind": "concrete_frame", "strength_combinations": {combo: True}})
+    r = call("run_design", {"software": "ETABS", "kind": "concrete_frame"})
+    assert "_error" not in r and r["combinations"]["strength"] == [combo], r
+    # no concrete frames yet: the program does not list the table - said so, not reported as a failure
+    sap.concrete_members = False
+    r = call("set_design_settings", {"software": "ETABS", "kind": "concrete_frame",
+                                     "strength_combinations": {combo: True}})
+    assert "_error" not in r and "members" in r["combinations_not_confirmed"], r
+
+
+def test_022_nonprismatic_section():
+    sap = fresh("ETABS")
+    seg = {"start_section": "C500x500", "end_section": "B300x600", "length": 1.0, "length_type": "variable",
+           "ei33": "cubic", "ei22": "linear"}
+    r = call("define_nonprismatic_section", {"software": "ETABS", "name": "TAPER", "segments": [seg]})
+    assert "_error" not in r and r["read_back"] == [seg] and "not_kept_as_given" not in r, r
+    bad = call("define_nonprismatic_section", {"software": "ETABS", "name": "TAPER", "segments": [seg]})
+    assert bad["_error"] and "replace" in bad["hint"]
+    bad = call("define_nonprismatic_section", {"software": "ETABS", "name": "T2",
+                                               "segments": [{**seg, "start_section": "NOPE"}]})
+    assert bad["_error"] and "NOPE" in bad["message"]
+    bad = call("define_nonprismatic_section", {"software": "ETABS", "name": "T3",
+                                               "segments": [{**seg, "start_section": "TAPER"}]})
+    assert bad["_error"] and "non-prismatic" in bad["message"]
+    d = call("get_definition_details", {"software": "ETABS", "kind": "frame_sections", "names": ["TAPER"]})
+    items = d.get("items") or d.get("frame_sections") or []
+    assert items and items[0]["segments"] == [seg], d
+
+
+def test_022_section_designer_sap_only():
+    sap = fresh("SAP2000")
+    shapes = [{"shape": "solid_rect", "center": [0, 0], "height": 0.6, "width": 0.3},
+              {"shape": "rebar_single", "center": [0.1, -0.25], "bar_size": "25", "rebar_material": "A615Gr60"}]
+    r = call("define_section_designer_section", {"software": "SAP2000", "name": "SD1", "material": "C30",
+                                                 "design_type": "concrete_column_check", "shapes": shapes})
+    assert "_error" not in r, r
+    kinds = [s["shape"] for s in r["read_back"]["shapes"]]
+    assert kinds == ["solid_rect", "rebar_single"] and r["read_back"]["design_type"] == "concrete_column_check"
+    assert r["read_back"]["shapes"][0]["height"] == 0.6 and r["properties"]["area"] == 0.18
+    bad = call("define_section_designer_section", {"software": "SAP2000", "name": "SD2", "material": "C30",
+                                                   "design_type": "no_design", "shapes": [
+                                                       {"shape": "rebar_single", "center": [0, 0], "bar_size": "25"}]})
+    assert bad["_error"] and "rebar_material" in bad["message"]
+    bad = call("define_section_designer_section", {"software": "SAP2000", "name": "SD3", "material": "C30",
+                                                   "design_type": "no_design", "shapes": [{"shape": "solid_rect"}]})
+    assert bad["_error"]
+    fresh("ETABS")
+    e = call("define_section_designer_section", {"software": "ETABS", "name": "SD1", "material": "C30",
+                                                 "design_type": "no_design", "shapes": [
+                                                     {"shape": "polygon", "points": [[0, 0], [1, 0], [0, 1]]}]})
+    assert e["_error"] and "ETABS cannot take" in e["message"]
+    e = call("define_section_designer_section", {"software": "ETABS", "name": "SD1", "material": "C30",
+                                                 "design_type": "no_design", "shapes": [{**shapes[0], "reinforced": True,
+                                                                                         "rebar_material": "A615Gr60"}]})
+    assert e["_error"] and "rebar_single" in e["message"]
+    fresh("SAFE")
+    e = call("define_section_designer_section", {"software": "SAFE", "name": "SD1", "material": "C30",
+                                                 "design_type": "no_design", "shapes": shapes})
+    assert e["_error"]

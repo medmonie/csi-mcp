@@ -673,7 +673,15 @@ def read_frame_sections(sap: Any, sw: str, names: list[str] | None) -> list[dict
         if sm and any(abs(float(v) - 1) > 1e-12 for v in as_list(sm[0])):
             rec["modifiers"] = dict(zip(("A", "AS2", "AS3", "J", "I22", "I33", "Mass", "Weight"),
                                         (_r(v) for v in as_list(sm[0]))))
-        if rec.get("type") == "General":           # its properties are the section (dimensions are nominal)
+        if rec.get("type") in ("SD", "Variable"):
+            try:
+                from sections import read_nonprismatic, read_sd
+                extra = read_sd(sap, rec["name"]) if rec["type"] == "SD" else read_nonprismatic(sap, rec["name"])
+            except Exception:  # noqa: BLE001 - optional information
+                extra = None
+            if extra:
+                rec["section_designer" if rec["type"] == "SD" else "segments"] = extra
+        if rec.get("type") in ("General", "SD"):   # its properties are the section (dimensions are nominal)
             g = _try(sap, "PropFrame.GetSectProps", rec["name"])
             if g:
                 rec["properties"] = {k: float(f"{float(v):.10g}") for k, v in zip(

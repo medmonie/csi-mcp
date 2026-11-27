@@ -53,7 +53,9 @@ def _apply(sap: Any) -> dict[str, Any]:
     if len(vals) == 6:
         ret = vals.pop()
         if type(ret) is not int or ret != 0:
-            raise CSIApiError("ApplyEditedTables", ret=ret, hint="Inspect the model before retrying the import.")
+            lines = [ln.strip() for ln in str(log).splitlines() if ln.strip() and "Import Control" not in ln]
+            raise CSIApiError("ApplyEditedTables", ret=ret, detail=" | ".join(lines[-8:]),
+                              hint=f"Inspect the model before retrying the import. Counts: {vals[:4]}")
     if len(vals) != 5 or not isinstance(vals[-1], str) or any(type(v) is not int or v < 0 for v in vals[:4]):
         raise CSIApiError("ApplyEditedTables", detail="unrecognized import receipt; inspect the model")
     nums = vals[:4]
@@ -84,6 +86,25 @@ def write_table(sap: Any, key: str, version: int, fields: list[str], rows: list[
     try:
         api_call(f"DatabaseTables.SetTableForEditingArray('{key}')", sap.DatabaseTables.SetTableForEditingArray,
                  key, version, fields, len(rows), flat)
+        return _apply(sap)
+    except Exception as failure:
+        try:
+            api_call("CancelTableEditing", sap.DatabaseTables.CancelTableEditing)
+        except Exception as cleanup:
+            raise CSIApiError("CancelTableEditing", detail=f"import failed ({failure}) and the pending edit could not "
+                              f"be cancelled ({cleanup})",
+                              hint="Inspect the CSI import session before making another edit.") from failure
+        raise
+
+
+def write_tables(sap: Any, items: list[tuple[str, int, list[str], list[dict[str, str]]]]) -> dict[str, Any]:
+    """Set several whole tables, then apply them in ONE import (ETABS takes Section Designer shapes only together
+    with their section row - measured, 0.22.0). Cancels the pending edits when a set or the import is refused."""
+    try:
+        for key, version, fields, rows in items:
+            flat = [str(r.get(f, "")) for r in rows for f in fields]
+            api_call(f"DatabaseTables.SetTableForEditingArray('{key}')", sap.DatabaseTables.SetTableForEditingArray,
+                     key, version, fields, len(rows), flat)
         return _apply(sap)
     except Exception as failure:
         try:

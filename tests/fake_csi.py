@@ -726,6 +726,57 @@ class _DesignConcrete(_DesignBase):
                 tuple(0.0005 for _ in n), u, z, u, z, tuple("" for _ in n), tuple("" for _ in n), 0]
 
 
+class _SDShape:
+    def __init__(self, pf):
+        self.pf = pf
+
+    def _sh(self, name):
+        return self.pf.sd[name]["shapes"]
+
+    def _area(self, name):
+        sec = self.pf.sec[name]
+        area = sum(v[1].get("area", 0.0) for v in self._sh(name).values())
+        self.pf.sec[name] = (sec[0], sec[1], area, sec[3])
+
+    def Delete(self, name, shape, all_=False):
+        self._sh(name).clear()
+        self._area(name)
+        return 0
+
+    def SetSolidRect(self, name, shape, mat, ss, x, y, h, w, rot, color=-1, reinf=False, matrebar=""):
+        shape = shape or f"R{len(self._sh(name)) + 1}"
+        self._sh(name)[shape] = (101, {"mat": mat, "x": x, "y": y, "h": h, "w": w, "rot": rot, "reinf": reinf,
+                                       "mr": matrebar, "area": h * w})
+        self._area(name)
+        return [shape, 0]
+
+    def GetSolidRect(self, name, shape, *a):
+        t, d = self._sh(name).get(shape, (0, None))
+        if t != 101:
+            return ["", "", 0, 0.0, 0.0, 0.0, 0.0, 0.0, False, "", 1]
+        return [d["mat"], "", -1, d["x"], d["y"], d["h"], d["w"], d["rot"], d["reinf"], d["mr"], 0]
+
+    def SetReinfSingle(self, name, shape, x, y, size="", mr=""):
+        shape = shape or f"B{len(self._sh(name)) + 1}"
+        self._sh(name)[shape] = (301, {"x": x, "y": y, "size": size, "mr": mr})
+        return [shape, 0]
+
+    def GetReinfSingle(self, name, shape, *a):
+        t, d = self._sh(name).get(shape, (0, None))
+        if t != 301:
+            return [0.0, 0.0, "", "", 1]
+        return [d["x"], d["y"], d["size"], d["mr"], 0]
+
+
+class _DesignConcreteEtabs(_DesignConcrete):
+    """ETABS 23.2: concrete frame design has SetComboStrength but no GetComboStrength (type-library dump)."""
+
+    def __getattribute__(self, name):
+        if name == "GetComboStrength":
+            raise AttributeError(name)
+        return super().__getattribute__(name)
+
+
 class _Grids(_Names):
     def __init__(self):
         super().__init__(["G1"])
@@ -1054,6 +1105,35 @@ class _PropFrames(_Names):
 
     def SetRectangle(self, name, mat, t3, t2, *a):
         return self._put(name, 8, (t3, t2), t3 * t2, mat)
+
+    # ---- non-prismatic and Section Designer (0.22.0)
+    def SetNonPrismatic(self, name, n, starts, ends, lens, types, e33, e22, color=-1, notes="", guid=""):
+        if any(x not in self.sec for x in list(starts) + list(ends)):
+            return 1
+        self.np = getattr(self, "np", {})
+        self.np[name] = (n, tuple(starts), tuple(ends), tuple(lens), tuple(types), tuple(e33), tuple(e22))
+        return self._put(name, 14, (), self.sec[starts[0]][2], self.sec[starts[0]][3])
+
+    def GetNonPrismatic(self, name, *a):
+        if name not in getattr(self, "np", {}):
+            return [0, (), (), (), (), (), (), -1, "", "", 1]
+        return [*self.np[name], -1, "", "", 0]
+
+    def SetSDSection(self, name, mat, design=0, color=-1, notes="", guid=""):
+        self.sd = getattr(self, "sd", {})
+        self.sd[name] = {"mat": mat, "design": design, "shapes": {}}
+        return self._put(name, 13, (), 0.0, mat)
+
+    def GetSDSection(self, name, *a):
+        d = getattr(self, "sd", {}).get(name)
+        if d is None:
+            return ["", 0, (), (), 0, -1, "", "", 1]
+        sh = d["shapes"]
+        return [d["mat"], len(sh), tuple(sh), tuple(v[0] for v in sh.values()), d["design"], -1, "", "", 0]
+
+    @property
+    def SDShape(self):
+        return _SDShape(self)
 
     def SetCircle(self, name, mat, t3, *a):
         return self._put(name, 9, (t3,), 3.141592653589793 * t3 * t3 / 4, mat)
@@ -1639,10 +1719,13 @@ class _Tables:
         "Load Pattern Definitions": ("LoadPat", "DesignType", "SelfWtMult", "GUID"),
         "Spring Property Definitions - Line Springs": ("Name", "StiffOpt", "VertStiff", "RotStiff", "NonlinOpt",
                                                        "Color", "GUID", "Notes"),
+        "Concrete Frame Design Load Combination Data": ("ComboType", "ComboName"),
     }
 
     def _edit_rows(self, key):
         m = self.model
+        if key == "Concrete Frame Design Load Combination Data":
+            return [("Strength", c) for c in m.DesignConcrete.strength]
         if key.startswith("Steel Frame Design Preferences"):
             return [getattr(self, "steel_prefs", ("SMF", "0.75", "0.95", "1"))]
         if key == "Load Pattern Definitions":          # stale, like SAP2000 27.1: only the first pattern
@@ -1760,6 +1843,9 @@ class _Tables:
         keys.append("Generic Test Table")
         types.append(2)
         for k in self.EDIT_FIELDS:
+            if k == "Concrete Frame Design Load Combination Data" and not getattr(self.model, "concrete_members",
+                                                                                    True):
+                continue          # ETABS lists it once the model has concrete frames
             if k not in keys:
                 keys.append(k)
                 types.append(2)

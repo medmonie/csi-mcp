@@ -1,4 +1,5 @@
-r"""Phase 8.3 (0.21.0): set_frame_rebar in SAP2000, ETABS (and SAFE read-back) in NEW instances.
+r"""Phase 8.3 (0.21.0): set_frame_rebar in SAP2000, ETABS (and SAFE read-back) in NEW instances; 0.22.0: the column
+check also in ETABS (design combinations read from 'Concrete Frame Design Load Combination Data').
 
     run_live_rebar.bat [SAP2000] [ETABS] [SAFE] [--hidden]      Output: tests\results\live_rebar.txt
 
@@ -95,12 +96,13 @@ def run(sw):
     show("not concrete refused", "set_frame_rebar", {**S, "section": "NOPE", "rebar_material": "R420",
                                                      "confinement_material": "R420", "column": col},
          expect_error=True, limit=300)
-    if sw != "SAP2000":
-        return       # ETABS: combination selection for design not confirmed through the API yet (see CHANGELOG)
+    if sw == "SAFE":
+        return       # SAFE: frame design of columns is not the subject here (read-back only)
     # ---- design check of the column under axial load only
     fr = show("column", "create_frames", {**S, "units": U, "section": "COL", "frames": [
         {"start": [0, 0, 0], "end": [0, 0, H], "name": "C1"}]}, limit=500)
     pts = fr["created"][0]["points"] if isinstance(fr, dict) and fr.get("created") else []
+    col_name = fr["created"][0]["name"] if isinstance(fr, dict) and fr.get("created") else "C1"
     show("fixed base", "assign_point_properties", {**S, "point_names": [pts[0]], "restraint": [True] * 6}, limit=200)
     show("top held laterally", "assign_point_properties", {**S, "point_names": [pts[1]],
                                                            "restraint": [True, True, False, True, True, False]},
@@ -115,13 +117,18 @@ def run(sw):
          limit=200)
     show("combination", "define_combination", {**S, "name": "C1", "items": [{"name": "PAX", "factor": 1.0}]},
          limit=300)
+    if sw == "ETABS":       # the column top is held laterally: no free mass, so the Modal case cannot start
+        show("modal case off", "set_analysis_options", {**S, "run_cases": {"Modal": False}}, limit=300)
     show("analysis", "run_analysis", {**S}, limit=500)
-    show("design settings", "set_design_settings", {**S, "kind": "concrete_frame", "code": "ACI 318-19",
-                                                     "strength_combinations": {"C1": True},
-                                                     "auto_generate_combinations": False}, limit=1500)
+    ds = {**S, "kind": "concrete_frame", "code": "ACI 318-19", "strength_combinations": {"C1": True}}
+    if sw == "SAP2000":
+        ds["auto_generate_combinations"] = False
+    dr = show("design settings", "set_design_settings", ds, limit=1500)
+    check(f"{sw}: design combination C1 read back as selected", isinstance(dr, dict) and not dr.get("_error")
+          and dr.get("settings_now", {}).get("combinations", {}).get("strength") == ["C1"], dr)
     show("design", "run_design", {**S, "kind": "concrete_frame"}, limit=800)
     res = show("design results", "get_design_results", {**S, "units": U, "kind": "concrete_frame",
-                                                         "names": ["C1"]}, limit=2500)
+                                                         "names": [col_name]}, limit=2500)
     cols = res.get("columns", []) if isinstance(res, dict) else []
     ratio = max((c["PMMRatio"] for c in cols), default=0.0)
     print(f"  Ab {ab:.6e} m2, Ast {ast:.6e}, phi Pn,max {phi_pn:.3f} kN, Pu {pu:.3f} kN -> hand ratio "
