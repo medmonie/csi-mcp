@@ -16,7 +16,7 @@ program**, each with one tool named after it: **`etabs(action, params)`, `sap200
 | ETABS | 23.2.0 | OK | OK |
 | SAFE | 23.3.2 | OK | OK |
 
-Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.15.2
+Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.16.0
 (roadmap Phases 0-2 with V1 verification: 238 / 238 values match CSI's published results: foundation, full model read, results depth; report stages R1-R3; Phase 3 first batch:
 area mesh, joint patterns, area loads; 0.7.0: one server per program; 0.8.0: definitions - materials, sections,
 springs, patterns, cases, combinations, mass source; 0.9.0: objects - points, frames, areas, their assignments,
@@ -173,6 +173,8 @@ one automatically when the rows are cut to `max_rows`, or always with `export: c
 | `tests\run_live_phase5b.bat [..] [--hidden]` | 0.14.0: SAP2000 gap / hook / multi-linear links in a nonlinear static case (U by hand, exact), user-coefficient seismic V = C W in SAP2000 and ETABS (8.25 kN) | `tests\results\live_phase5b.txt` |
 | `tests\run_verify_v4_safe.bat [--hidden]` | V4 SAFE: CSI's ACI 318-19 RC-SL Ex001 (strip moment, As) and RC-PN Ex001 (punching at grid B-2: stress, capacity, D/C) through the design actions | `tests\results\verify_v4_safe.txt`, `tests\results\verify\v4_safe\` |
 | `tests\run_live_diagrams.bat [..] [--keep-open]` | 0.15.0: result diagrams on multi-bay, multi-storey models (12 slabs, a wall) in SAP2000 and ETABS and a SAFE example copy - frame M / V / P per elevation, slab and wall contours - written as reports to compare with the programs' own displays; models kept. `run_live_diagrams_b.bat` writes to `diagrams_output_b` (use it while a model in `diagrams_output` is open) | `tests\results\live_diagrams.txt`, `tests\results\diagrams_output\` |
+| `tests\run_live_wind.bat [SAP2000] [ETABS] [--hidden]` | 0.16.0: ASCE 7-16 auto wind on diaphragms and user wind loads in SAP2000 and ETABS (3 x 2 bays, 2 storeys, a diaphragm per floor): story forces against a hand calculation (each program's own distribution), user-load base shear | `tests\results\live_wind.txt`, models in `tests\results\wind_output\` |
+| `tests\run_diag_wind.bat` | 0.16.0 probe: auto wind API methods (with parameter names) and wind tables in SAP2000 / ETABS | `tests\results\diag_wind.txt` |
 | `tests\run_verify_v4.bat [--hidden]` | V4: copies of CSI's ETABS design examples (ACI 318-19 Ex001 / Ex002, AISC 360-16 Ex001 / Ex002) designed through the actions with the code and combinations they hold, compared with CSI's published values; design report per example | `tests\results\verify_v4.txt`, `tests\results\verify\v4\` |
 | `tests\run_diag_phase5.bat` | raw API: SetASCE716 vs SetASCE716_1 in ETABS / SAP2000, auto seismic tables, SAP2000 design table names | `tests\results\diag_phase5.txt` |
 | `tests\run_verify_v1.bat [..] [--hidden] [--only "Example 1-001"]` | V1: 38 of CSI's own verification models (copies) analysed and read through the MCP, 238 values compared with CSI's published program values (needs the "CSI Solved Examples" folder; expected values in `tests\verify\expected_v1.py`, local only) | `tests\results\verify_v1.txt`, `tests\results\verify\v1_results.csv` |

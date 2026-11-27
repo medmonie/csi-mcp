@@ -1640,3 +1640,15 @@ def test_contour_scales_match_programs():
     b = dg.csi_bounds(-213.6, 66.0, "etabs")
     assert b[0] == -220 and b[-1] == 80
     assert len(dg.CSI15) == 15
+
+
+def test_wind_params():
+    import pytest
+    from pydantic import ValidationError
+    from program_specific import MPH, WindP
+    base = dict(software="SAP2000", load_pattern="WX", code="ASCE 7-16", asce_case="1", wind_speed=40,
+                wind_speed_unit="m/s", exposure_category="C", Kzt=1, gust_factor=0.85, Kd=0.85)
+    WindP(**base, Cpw=0.8, Cpl=0.5)
+    with pytest.raises(ValidationError):
+        WindP(**base, Cpw=0.8)                       # Cpw without Cpl
+    assert abs(40 * MPH["m/s"] - 89.4775) < 1e-3

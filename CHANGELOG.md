@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.0 - 2026-11-27
+
+Phase 5: wind loads. 2 new actions, 1 extended.
+- `set_auto_wind` (SAP2000, ETABS): a wind pattern becomes an ASCE 7-16 automatic wind load with the designer's
+  parameters - exposure from diaphragms (direction angle, Cpw / Cpl) or shells, ASCE case 1-4 (ETABS: or all), V
+  in mph, m/s or km/h (converted to mph exactly), exposure category, Kzt, G, Kd, ETABS Ke and parapet, load range
+  (SAP2000 elevations, ETABS stories). SAP2000 through LoadPatterns.AutoWind.SetASCE716; ETABS has no wind API
+  (its AutoWind object has no methods - measured) so through 'Load Pattern Definitions - Auto Wind - ASCE 7-16'.
+  Read back, with the exposure widths ETABS works out per diaphragm.
+- `set_wind_user_loads` (SAP2000, ETABS): the designer's Fx / Fy / Mz per diaphragm at a point - for codes CSI does
+  not list (e.g. ECP 201). SAP2000 SetUserLoad; ETABS 'Load Pattern Definitions - Auto Wind - User Loads'.
+- `define_diaphragm` works in SAP2000: a rigid diaphragm constraint about Z on the joints (areas give their corner
+  joints) - SAP2000 puts diaphragm wind on these.
+- Measured (tests\run_live_wind.bat, V = 40 m/s, exposure C, Cpw 0.8, Cpl 0.5, G 0.85, Kd 0.85, 12 m wide, levels
+  3.5 / 7 m): the two programs distribute the same ASCE 7-16 load differently. SAP2000 takes the pressure at each
+  diaphragm's elevation over its tributary height, the lowest diaphragm down to the base: 51.073 / 17.973 kN (hand:
+  same to 1e-7). ETABS integrates the pressure over the height and gives each storey's load to the levels below and
+  above as simple spans, the base half to the supports: 34.214 / 17.554 kN (hand: same to 2e-5). Base shear 69.05
+  vs 51.77 kN for the same building - stated in the action's answer. User loads: base shear -50.000 kN in both.
+
 ## 0.15.2 - 2026-11-27
 
 - `set_area_mesh` works in ETABS (it has no API call; through the program's own tables): walls get auto

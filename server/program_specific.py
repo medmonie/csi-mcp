@@ -86,10 +86,52 @@ class DiaphragmP(_EditP):
     replace: bool = Field(default=False, description="change an existing diaphragm's type")
 
 
+def _sap_diaphragm(p: DiaphragmP) -> dict[str, Any]:
+    """SAP2000: a diaphragm is a constraint (ConstraintDef.SetDiaphragm about Z) given to joints; areas are taken as
+    their corner joints. Rigid only."""
+    sap = bridge.sap_model(p.software)
+    if p.semi_rigid:
+        raise CSIValidationError("SAP2000 diaphragm constraints are rigid only.",
+                                 hint="Leave semi_rigid false, or model the floor's in-plane stiffness with shells.")
+    have = bridge.try_name_list(sap, ["ConstraintDef"])[0] or []
+    exists = p.name in have
+    if exists and not p.replace:
+        raise CSIValidationError(f"Constraint '{p.name}' exists.", hint="replace: true reassigns it.")
+    pts = _targets(sap, "PointObj", p.points, None, "points") if p.points else []
+    ars = _targets(sap, "AreaObj", p.areas, None, "areas") if p.areas else []
+    joints = list(dict.fromkeys(pts + [str(j) for a in ars
+                                        for j in api_call("AreaObj.GetPoints", sap.AreaObj.GetPoints, a)[1]]))
+    if not joints:
+        raise CSIValidationError("Give points and / or areas to assign the diaphragm to.")
+    plan = {"name": p.name, "semi_rigid": False, "existed": exists, "points": len(pts), "areas": len(ars),
+            "joints": len(joints), "note": "SAP2000: diaphragm constraint about global Z on the joints (areas: their "
+            "corner joints)."}
+    if p.dry_run:
+        return _dry(plan, model_locked=bridge.is_locked(sap))
+    snap, was_locked = _start_edit(p, sap, "before_diaphragm", "define a diaphragm")
+    api_call("ConstraintDef.SetDiaphragm", sap.ConstraintDef.SetDiaphragm, p.name, 3, "Global")
+    for j in joints:
+        api_call(f"PointObj.SetConstraint('{j}')", sap.PointObj.SetConstraint, j, p.name, 0, True)
+    ax = api_call("ConstraintDef.GetDiaphragm", sap.ConstraintDef.GetDiaphragm, p.name, 0, "")
+    got = {}
+    for j in joints[:300]:
+        o = _try(sap, "PointObj.GetConstraint", j, 0, [], [], 0) or [0, [], []]
+        got[j] = [str(c) for c in (o[2] if len(o) > 2 else [])]
+    wrong = {j: c for j, c in got.items() if p.name not in c}
+    if wrong:
+        raise CSIValidationError(f"Joints read back without the diaphragm: {dict(list(wrong.items())[:20])}")
+    return {**plan, "read_back": {"axis": {1: "X", 2: "Y", 3: "Z"}.get(int(ax[0]), ax[0]),
+                                  "joints_with_diaphragm": len(got)},
+            "model_was_unlocked": was_locked, **({"snapshot": snap} if snap else {})}
+
+
 @action("define_diaphragm", "Create (or with replace change) a rigid or semi-rigid diaphragm and assign it to points "
-        "and / or floor areas. Answers with the diaphragm and assignments read back.", "Definitions", "edit",
-        DiaphragmP, programs="EF")
+        "and / or floor areas[[S: (SAP2000: a rigid diaphragm constraint about Z on the joints; areas give their "
+        "corner joints)]]. Answers with the diaphragm and assignments read back.", "Definitions", "edit",
+        DiaphragmP, programs="ESF")
 def define_diaphragm(p: DiaphragmP) -> dict[str, Any]:
+    if p.software == "SAP2000":
+        return _sap_diaphragm(p)
     sap = bridge.sap_model(p.software)
     have = bridge.try_name_list(sap, ["Diaphragm"])[0] or []
     exists = p.name in have
@@ -330,6 +372,273 @@ def set_auto_seismic(p: SeismicP) -> dict[str, Any]:
         raise CSIValidationError(f"Read back differs: {mism}")
     return {**plan, "read_back": back, "note": "Fa / Fv in read_back are the program's site coefficients for the "
             "site class.", "model_was_unlocked": was_locked, **({"snapshot": snap} if snap else {})}
+
+
+# --------------------------------------------------------------------------- automatic wind
+
+WIND_KEY_E = "Load Pattern Definitions - Auto Wind - ASCE 7-16"
+WIND_USER_E = "Load Pattern Definitions - Auto Wind - User Loads"
+MPH = {"mph": 1.0, "m/s": 1 / 0.44704, "km/h": 1 / 1.609344}
+EXPOSURE_SAP = {"B": 1, "C": 2, "D": 3}
+
+
+class WindP(_EditP):
+    load_pattern: str = Field(description="an existing load pattern of type wind")
+    code: Literal["ASCE 7-16"] = Field(description="the code named by the designer (ASCE 7-16 in this version)")
+    exposure_from: Literal["diaphragms", "shells"] = Field(default="diaphragms", description=(
+        "diaphragms (wind on the diaphragms' extents, at the direction angle) | shells (from the wind pressure "
+        "coefficients assigned to areas)"))
+    angle: float = Field(default=0.0, ge=-360, le=360, description="wind direction angle (deg) from global X, CCW "
+                         "(diaphragm exposure)")
+    Cpw: float | None = Field(default=None, description=(
+        "windward pressure coefficient (diaphragm exposure)[[S:; required]][[E:; with Cpl: user Cp, else ETABS "
+        "works Cp out from the building's L / B]]"))
+    Cpl: float | None = Field(default=None, description="leeward pressure coefficient (positive number, as Cpw)")
+    asce_case: Literal["1", "2", "3", "4", "all"] = Field(description=(
+        "ASCE 7-16 Fig. 27.3-8 load case 1 | 2 | 3 | 4[[E: | all (ETABS makes every case)]]"))
+    e1: float = Field(default=0.15, ge=0, le=1, description="ex ratio for cases 2 and 4 (ASCE 7-16: 0.15)")
+    e2: float = Field(default=0.15, ge=0, le=1, description="ey ratio for cases 2 and 4 (ASCE 7-16: 0.15)")
+    wind_speed: float = Field(gt=0, description="basic wind speed V (3-s gust)")
+    wind_speed_unit: Literal["mph", "m/s", "km/h"] = Field(default="mph", description=(
+        "unit of wind_speed; the programs take mph, converted exactly"))
+    exposure_category: Literal["B", "C", "D"] = Field(description="exposure category")
+    Kzt: float = Field(gt=0, description="topographic factor")
+    gust_factor: float = Field(gt=0, description="gust-effect factor G")
+    Kd: float = Field(gt=0, description="directionality factor")
+    Ke: float | None = Field(default=None, gt=0, description="[[E: ground elevation factor Ke (default: ETABS' 1)]]")
+    parapet_height: float | None = Field(default=None, gt=0, description="[[E: parapet height (diaphragm exposure)]]")
+    top_z: float | None = Field(default=None, description="[[S: user top elevation of the load (default: program)]]")
+    bottom_z: float | None = Field(default=None, description="[[S: user bottom elevation (default: program)]]")
+    top_story: str | None = Field(default=None, description="[[E: top story (default: the highest story)]]")
+    bottom_story: str | None = Field(default=None, description="[[E: bottom story (default: Base)]]")
+
+    @model_validator(mode="after")
+    def _check(self) -> "WindP":
+        if (self.Cpw is None) != (self.Cpl is None):
+            raise ValueError("give both Cpw and Cpl, or neither")
+        if (self.top_z is None) != (self.bottom_z is None):
+            raise ValueError("give both top_z and bottom_z, or neither")
+        return self
+
+
+def _wind_pattern(sap: Any, name: str) -> None:
+    pats = bridge.try_name_list(sap, ["LoadPatterns"])[0] or []
+    if name not in pats:
+        raise CSIValidationError(f"Load pattern '{name}' is not defined.", hint=f"Patterns: {pats[:30]}")
+    t = _try(sap, "LoadPatterns.GetLoadType", name)
+    if t and int(t[0]) != 6:
+        raise CSIValidationError(f"'{name}' is not a wind pattern (type code {t[0]}).",
+                                 hint="define_load_pattern with type wind first.")
+
+
+def read_asce716_wind(sap: Any, software: str, name: str) -> dict[str, Any] | None:
+    import db_edit
+    code = _try(sap, "LoadPatterns.GetAutoWindCode", name)
+    out: dict[str, Any] = {"code": str(code[0]) if code else None}
+    if software == "SAP2000":
+        o = _try(sap, "LoadPatterns.AutoWind.GetASCE716", name, 0, 0.0, 0.0, 0.0, 0, 0.0, 0.0, False, 0.0, 0.0, 0.0,
+                 0, 0.0, 0.0, 0.0, 0.0, False)
+        if not o:
+            return None
+        keys = ("exposure_from", "angle", "Cpw", "Cpl", "asce_case", "e1", "e2", "user_z", "top_z", "bottom_z",
+                "wind_speed_mph", "exposure_category", "Kzt", "gust_factor", "Kd", "solid_gross_ratio",
+                "user_exposure")
+        rec = dict(zip(keys, o[:17]))
+        rec["exposure_from"] = {1: "diaphragms", 2: "shells"}.get(int(rec["exposure_from"]), rec["exposure_from"])
+        rec["exposure_category"] = {v: k for k, v in EXPOSURE_SAP.items()}.get(int(rec["exposure_category"]),
+                                                                              rec["exposure_category"])
+        rec["asce_case"] = str(rec["asce_case"])
+        out.update({k: (round(v, 9) if isinstance(v, float) else v) for k, v in rec.items()})
+        return out
+    try:
+        _, _, rows = db_edit.read_table(sap, WIND_KEY_E)
+    except Exception:  # noqa: BLE001
+        return None
+    mine = [r for r in rows if r.get("Name") == name]
+    if not mine:
+        return None
+    head = mine[0]
+    out.update({k: head.get(k) for k in ("Exposure", "TopStory", "BotStory", "Parapet", "ParapetHt", "UserCp",
+                                         "UserCpw", "UserCpl", "ASCECase", "e1", "e2", "WindSpeed", "ExpType",
+                                         "GrdElevFact", "kzt", "GustFact", "Kd", "Angle", "WidthType")})
+    out["exposure_widths"] = [{k: r.get(k) for k in ("Story", "Diaphragm", "Width", "Depth", "X", "Y")}
+                              for r in mine if r.get("Diaphragm")]
+    return out
+
+
+@action("set_auto_wind", "Make a wind load pattern an automatic wind load (ASCE 7-16) with the designer's "
+        "parameters: exposure from diaphragms (direction angle, Cpw / Cpl) or shells, ASCE case, V, exposure "
+        "category, Kzt, G, Kd, load range. Every value comes from the designer. Answers with the parameters read "
+        "back[[E: and the exposure widths ETABS works out per diaphragm]]. For a code CSI does not list (e.g. ECP "
+        "201): set_wind_user_loads with the designer's story forces.", "Definitions", "edit", WindP, programs="ES",
+        fields={"Ke": "E", "parapet_height": "E", "top_story": "E", "bottom_story": "E", "top_z": "S", "bottom_z": "S"},
+        options={"asce_case": {"all": "E"}})
+def set_auto_wind(p: WindP) -> dict[str, Any]:
+    import db_edit
+    sap = bridge.sap_model(p.software)
+    _wind_pattern(sap, p.load_pattern)
+    if p.software == "SAP2000" and p.exposure_from == "diaphragms" and p.Cpw is None:
+        raise CSIValidationError("SAP2000 needs Cpw and Cpl for wind on diaphragms.",
+                                 hint="Give the designer's windward / leeward coefficients (ASCE 7-16 Fig. 27.3-1).")
+    v_mph = p.wind_speed * MPH[p.wind_speed_unit]
+    plan = {k: v for k, v in p.model_dump(exclude_none=True).items()
+            if k not in ("software", "dry_run", "snapshot", "allow_unlock")}
+    plan["wind_speed_mph"] = round(v_mph, 6)
+    if p.software == "SAP2000":
+        have = bridge.try_name_list(sap, ["ConstraintDef"])[0] or []
+        diaphs = [c for c in have if (_try(sap, "ConstraintDef.GetConstraintType", c) or [None])[0] == 2]
+        if p.exposure_from == "diaphragms" and not diaphs:
+            plan["warning"] = ("No diaphragm constraints in the model: SAP2000 puts diaphragm wind on diaphragm "
+                               "constraints (define_diaphragm), so this load would be zero.")
+    if p.dry_run:
+        return _dry(plan, model_locked=bridge.is_locked(sap))
+    with bridge.units_scope(sap, p.units):
+        snap, was_locked = _start_edit(p, sap, "before_auto_wind", "set an automatic wind load")
+        if p.software == "SAP2000":
+            api_call("LoadPatterns.AutoWind.SetASCE716", sap.LoadPatterns.AutoWind.SetASCE716, p.load_pattern,
+                     1 if p.exposure_from == "diaphragms" else 2, p.angle, p.Cpw or 0.0, p.Cpl or 0.0,
+                     int(p.asce_case), p.e1, p.e2, p.top_z is not None, p.top_z or 0.0, p.bottom_z or 0.0, v_mph,
+                     EXPOSURE_SAP[p.exposure_category], p.Kzt, p.gust_factor, p.Kd, 0.0, False)
+        else:
+            names = [s_["name"] for s_ in read_stories(sap)["stories"]]
+            top = p.top_story or (names[-1] if names else "Base")
+            bot = p.bottom_story or "Base"
+            for s_ in (top, bot):
+                if s_ != "Base" and s_ not in names:
+                    raise CSIValidationError(f"Story '{s_}' is not in the model.", hint=f"Stories: {names}")
+            version, fields, rows = db_edit.read_table(sap, WIND_KEY_E)
+            rows = [r for r in rows if r.get("Name") != p.load_pattern]
+            user_cp = p.Cpw is not None
+            want = {"Name": p.load_pattern, "IsAuto": "No",
+                    "Exposure": "Diaphragms" if p.exposure_from == "diaphragms" else "Shells",
+                    "TopStory": top, "BotStory": bot, "Parapet": _yes(p.parapet_height is not None),
+                    "ParapetHt": f"{p.parapet_height:g}" if p.parapet_height else "",
+                    "UserCp": _yes(user_cp), "UserCpw": f"{p.Cpw:g}" if user_cp else "",
+                    "UserCpl": f"{p.Cpl:g}" if user_cp else "",
+                    "ASCECase": "Create All" if p.asce_case == "all" else p.asce_case,
+                    "e1": f"{p.e1:g}", "e2": f"{p.e2:g}", "WindSpeed": f"{v_mph:.10g}",
+                    "ExpType": p.exposure_category, "GrdElevFact": f"{p.Ke:g}" if p.Ke else "1",
+                    "kzt": f"{p.Kzt:g}", "GustFact": f"{p.gust_factor:g}", "Kd": f"{p.Kd:g}",
+                    "WidthType": "Auto", "Angle": f"{p.angle:g}" if p.exposure_from == "diaphragms" else ""}
+            missing = [f for f in ("Name", "Exposure", "WindSpeed", "ExpType", "TopStory") if f not in fields]
+            if missing:
+                raise CSIValidationError(f"'{WIND_KEY_E}' has no field(s) {missing}; fields: {fields}.")
+            rows.append({f: want.get(f, "") for f in fields})
+            db_edit.write_table(sap, WIND_KEY_E, version, fields, rows)
+        back = read_asce716_wind(sap, p.software, p.load_pattern)
+    if not back:
+        raise CSIValidationError("The automatic wind parameters could not be read back.")
+    mism: dict[str, Any] = {}
+    if back.get("code") not in ("ASCE7-16", "ASCE 7-16"):
+        mism["code"] = back.get("code")
+    if p.software == "SAP2000":
+        for k, v in (("wind_speed_mph", v_mph), ("Kzt", p.Kzt), ("gust_factor", p.gust_factor), ("Kd", p.Kd)):
+            if abs(float(back.get(k) or 0) - v) > 1e-6 * max(1, v):
+                mism[k] = back.get(k)
+        if back.get("exposure_category") != p.exposure_category:
+            mism["exposure_category"] = back.get("exposure_category")
+    else:
+        for k, v in (("WindSpeed", v_mph), ("kzt", p.Kzt), ("GustFact", p.gust_factor), ("Kd", p.Kd)):
+            if abs(float(back.get(k) or 0) - v) > 1e-4 * max(1, v):
+                mism[k] = back.get(k)
+        if back.get("ExpType") != p.exposure_category:
+            mism["ExpType"] = back.get("ExpType")
+    if mism:
+        raise CSIValidationError(f"Read back differs: {mism}")
+    how = ("SAP2000 takes the pressure at each diaphragm's elevation over its tributary height, the lowest "
+           "diaphragm down to the bottom of the load (measured)" if p.software == "SAP2000" else
+           "ETABS integrates the pressure over the height and gives each storey's load to the levels below and above "
+           "as simple-span reactions; the half of the lowest storey's load at the base goes to the supports "
+           "(measured)")
+    return {**plan, "read_back": back, "note": f"The story forces are worked out at analysis: {how}. Read them "
+            "after run_analysis with query_database_table ('Auto Wind Loads To Horizontal Diaphragms' in SAP2000) or "
+            "the base reactions.", "model_was_unlocked": was_locked,
+            **({"snapshot": snap} if snap else {})}
+
+
+class WindLoad(Params):
+    diaphragm: str = Field(min_length=1, description="diaphragm[[S: constraint]] that takes the load")
+    story: str | None = Field(default=None, description="[[E: story of the diaphragm (required)]]")
+    fx: float = Field(default=0.0, description="force in global X")
+    fy: float = Field(default=0.0, description="force in global Y")
+    mz: float = Field(default=0.0, description="moment about Z")
+    x: float = Field(description="X of the load point")
+    y: float = Field(description="Y of the load point")
+
+
+class WindUserP(_EditP):
+    load_pattern: str = Field(description="an existing load pattern of type wind")
+    loads: list[WindLoad] = Field(min_length=1, max_length=500, description=(
+        "the designer's forces per diaphragm (e.g. from ECP 201): diaphragm, [[E:story, ]]fx, fy, mz, x, y"))
+    reversible: bool = Field(default=False, description="[[E: loads reversible in combinations]]")
+
+
+@action("set_wind_user_loads", "Make a wind load pattern carry the designer's wind forces on diaphragms (user "
+        "loads): for each diaphragm Fx, Fy, Mz at a point - for codes CSI does not list (e.g. ECP 201), with the "
+        "forces worked out by the designer. Replaces the pattern's earlier auto wind. Answers with the loads read "
+        "back.", "Definitions", "edit", WindUserP, programs="ES", fields={"reversible": "E"})
+def set_wind_user_loads(p: WindUserP) -> dict[str, Any]:
+    import db_edit
+    sap = bridge.sap_model(p.software)
+    _wind_pattern(sap, p.load_pattern)
+    if p.software == "ETABS":
+        names = [s_["name"] for s_ in read_stories(sap)["stories"]]
+        bad = [ld.story for ld in p.loads if not ld.story or ld.story not in names]
+        if bad:
+            raise CSIValidationError(f"ETABS user wind loads need each load's story; not in the model: {bad[:10]}",
+                                     hint=f"Stories: {names}")
+        have = bridge.try_name_list(sap, ["Diaphragm"])[0] or []
+    else:
+        have = bridge.try_name_list(sap, ["ConstraintDef"])[0] or []
+    missing = sorted({ld.diaphragm for ld in p.loads} - set(have))
+    if missing:
+        raise CSIValidationError(f"Diaphragm(s) not in the model: {missing}", hint=f"Diaphragms: {have[:30]}"
+                                 + ("" if p.software == "ETABS" else " (define_diaphragm makes them in SAP2000)"))
+    if p.software == "SAP2000":
+        dup = [d for d in {ld.diaphragm for ld in p.loads} if sum(ld.diaphragm == d for ld in p.loads) > 1]
+        if dup:
+            raise CSIValidationError(f"SAP2000 takes one user wind load per diaphragm; repeated: {dup}")
+    plan = {"load_pattern": p.load_pattern, "loads": [ld.model_dump(exclude_none=True) for ld in p.loads],
+            "units": describe_units(p.units)}
+    if p.dry_run:
+        return _dry(plan, model_locked=bridge.is_locked(sap))
+    with bridge.units_scope(sap, p.units):
+        snap, was_locked = _start_edit(p, sap, "before_wind_user_loads", "set user wind loads")
+        if p.software == "SAP2000":
+            for ld in p.loads:
+                api_call(f"LoadPatterns.AutoWind.SetUserLoad('{ld.diaphragm}')", sap.LoadPatterns.AutoWind.SetUserLoad,
+                         p.load_pattern, ld.diaphragm, ld.fx, ld.fy, ld.mz, ld.x, ld.y)
+            o = api_call("LoadPatterns.AutoWind.GetUserLoad", sap.LoadPatterns.AutoWind.GetUserLoad, p.load_pattern,
+                         0, [], [], [], [], [], [])
+            back = [{"diaphragm": str(o[1][i]), "fx": float(o[2][i]), "fy": float(o[3][i]), "mz": float(o[4][i]),
+                     "x": float(o[5][i]), "y": float(o[6][i])} for i in range(int(o[0]))]
+        else:
+            version, fields, rows = db_edit.read_table(sap, WIND_USER_E)
+            rows = [r for r in rows if r.get("Name") != p.load_pattern]
+            for i, ld in enumerate(p.loads):
+                want = {"Name": p.load_pattern, "NumberSets": "1" if i == 0 else "", "Reversible":
+                        _yes(p.reversible) if i == 0 else "", "SetNumber": "1", "Story": ld.story,
+                        "Diaphragm": ld.diaphragm, "Fx": f"{ld.fx:.10g}", "Fy": f"{ld.fy:.10g}",
+                        "Mz": f"{ld.mz:.10g}", "X": f"{ld.x:.10g}", "Y": f"{ld.y:.10g}"}
+                rows.append({f: want.get(f, "") for f in fields})
+            db_edit.write_table(sap, WIND_USER_E, version, fields, rows)
+            _, _, rows2 = db_edit.read_table(sap, WIND_USER_E)
+            back = [{"story": r.get("Story"), "diaphragm": r.get("Diaphragm"), "fx": float(r.get("Fx") or 0),
+                     "fy": float(r.get("Fy") or 0), "mz": float(r.get("Mz") or 0), "x": float(r.get("X") or 0),
+                     "y": float(r.get("Y") or 0)} for r in rows2 if r.get("Name") == p.load_pattern]
+        code = _try(sap, "LoadPatterns.GetAutoWindCode", p.load_pattern)
+    key = (lambda d: (d.get("story") or "", d["diaphragm"]))
+    want_map = {(ld.story or "", ld.diaphragm): ld for ld in p.loads}
+    bad = []
+    for b in back:
+        w = want_map.get(key(b)) if p.software == "ETABS" else want_map.get(("", b["diaphragm"]))
+        if w is None or any(abs(b[k] - getattr(w, k)) > 1e-6 * max(1, abs(getattr(w, k))) for k in
+                            ("fx", "fy", "mz", "x", "y")):
+            bad.append(b)
+    if bad or len(back) != len(p.loads):
+        raise CSIValidationError(f"Read back differs ({len(back)} loads read back): {bad[:10]}")
+    return {**plan, "read_back": {"code": str(code[0]) if code else None, "loads": back},
+            "model_was_unlocked": was_locked, **({"snapshot": snap} if snap else {})}
 
 
 # --------------------------------------------------------------------------- user coefficient seismic
