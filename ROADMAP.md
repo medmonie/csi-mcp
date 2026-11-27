@@ -23,7 +23,7 @@ The full plan (API coverage map, phases, reporting track, decisions) is in the C
 Decisions (26 Nov 2026): D1 design with CSI's engines is allowed using the code the designer names; Claude never
 picks codes, combinations or overwrites. D2 report layout per request, A4 portrait by default.
 
-Word / RTF reports and tables to Excel: 0.20.0 (report templates are left to a skill or agent - user, 27 Nov).
+Word / RTF reports and tables to Excel: 0.20.0. Phase 8 (gap list in the project's roadmap): 8.3 frame rebar in 0.21.0. (report templates are left to a skill or agent - user, 27 Nov).
 
 ## Later (after Phase 5, decided 27 Nov 2026)
 - Model translation SAP2000 <-> ETABS: CSI's API has no cross-program export (ETABS / SAFE ExportFile / ImportFile

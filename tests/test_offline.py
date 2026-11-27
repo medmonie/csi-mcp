@@ -211,7 +211,7 @@ def test_tool_registration():
     os.environ["CSI_MCP_SPLIT"] = "1"
     try:
         tools = asyncio.run(server.create_server().list_tools())
-        assert [t.name for t in tools] == ["csi_read", "csi_edit"] and tools[0].annotations.readOnlyHint
+        assert [t.name for t in tools] == ["csi_read", "csi_edit"] and tools[0].annotations.readOnlyHint is False
     finally:
         del os.environ["CSI_MCP_SPLIT"]
 
@@ -1722,3 +1722,54 @@ def test_export_tables_to_excel(tmp_path, monkeypatch):
     assert bad["_error"] and "Story Drifts" in bad["hint"]
     q = call("query_database_table", {"software": "ETABS", "table_key": "Story Drifts", "export": "xlsx"})
     assert q["export_path"].endswith(".xlsx") and Path(q["export_path"]).is_file()
+
+
+# --------------------------------------------------------------------------- 0.20.1 audit review
+
+def test_csv_escapes_formulas_but_not_numbers_as_text(tmp_path):
+    import pandas as pd
+    import safety
+    df = pd.DataFrame({"Label": ["=SUM(A1)", "-1.5", "+3", "@x", "-X", "B12"]})
+    out = safety.export_frame(df, "esc", "csv", tmp_path)
+    vals = pd.read_csv(out, dtype=str, keep_default_na=False)["Label"].tolist()
+    assert vals == ["'=SUM(A1)", "-1.5", "+3", "'@x", "'-X", "B12"]
+
+
+def test_empty_table_any_code_but_records_need_code_zero():
+    import csi_bridge
+    from types import SimpleNamespace
+    calls = {"ret": 2, "n": 0, "data": ()}
+    func = lambda *a: [a[1], 1, ("Story", "Drift"), calls["n"], calls["data"], calls["ret"]]
+    sap = SimpleNamespace(DatabaseTables=SimpleNamespace(GetTableForDisplayArray=func))
+    fields, rows, _ = csi_bridge.CSIBridge().read_table(sap, "SAFE", "Story Drifts")
+    assert fields == ["Story", "Drift"] and rows == []
+    calls.update(n=1, data=("S1", "0.001"))
+    import pytest
+    with pytest.raises(csi_bridge.CSIApiError):
+        csi_bridge.CSIBridge().read_table(sap, "SAFE", "Story Drifts")
+
+
+def test_table_edit_cleanup_failure_keeps_the_original_error():
+    import db_edit
+    import pytest
+    from types import SimpleNamespace
+    from csi_bridge import CSIApiError
+    def boom(*a):
+        raise CSIApiError("ApplyEditedTables", detail="ORIGINAL")
+    t = SimpleNamespace(SetTableForEditingArray=lambda *a: [a[2], 0, a[4], 0],
+                        ApplyEditedTables=boom, CancelTableEditing=lambda: 1)
+    with pytest.raises(CSIApiError) as e:
+        db_edit.write_table(SimpleNamespace(DatabaseTables=t), "K", 1, ["A"], [{"A": "1"}])
+    assert "ORIGINAL" in str(e.value) and "CancelTableEditing" in str(e.value)
+
+
+def test_selection_fallback_signature_after_nonzero_code():
+    import csi_bridge
+    from types import SimpleNamespace
+    seen = []
+    def setter(*a):
+        seen.append(len(a))
+        return [a[-1], 1 if len(a) == 1 else 0]      # list-only form refused, (count, list) accepted
+    sap = SimpleNamespace(DatabaseTables=SimpleNamespace(SetLoadCasesSelectedForDisplay=setter))
+    csi_bridge.CSIBridge()._set_selected(sap, "SetLoadCasesSelectedForDisplay", ["Dead"])
+    assert seen == [1, 2]

@@ -391,8 +391,7 @@ class _Pdf:
         limit = self.p.max_rows_per_table
         note = f"Source: {source}. Units: {self.units_text}. Rows: {n}"
         if n > limit:
-            csv_path = self.path.with_name(f"{self.path.stem}_{safety.safe_stem(title, 40)}.csv")
-            df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            csv_path = safety.export_frame(df, f"{self.path.stem}_{title}", "csv", self.path.parent)
             self.csv_files.append(str(csv_path))
             note += f" (first {limit} shown; full table: {csv_path.name})"
         head = [self.para(title, "h2"), self.para(note, "note")]
@@ -769,10 +768,10 @@ class _Pdf:
                 "units_text": self.units_text, "generated": self.generated, "pagesize": tuple(self.pagesize),
                 "margin": self.margin, "landscape": self.orientation == "landscape"}
 
-    def build(self) -> None:
+    def build(self, destination: Path) -> None:
         from reportlab.platypus import SimpleDocTemplate
         story = self.story()
-        doc = SimpleDocTemplate(str(self.path), pagesize=self.pagesize, leftMargin=self.margin,
+        doc = SimpleDocTemplate(str(destination), pagesize=self.pagesize, leftMargin=self.margin,
                                 rightMargin=self.margin, topMargin=self.margin + 4, bottomMargin=self.margin + 6,
                                 title=self.title, author="CSI MCP", subject=f"{self.program} - {self.model_file}")
         doc.build(story, onFirstPage=self._page, onLaterPages=self._page)
@@ -838,13 +837,14 @@ def export_report(p: ReportP) -> dict[str, Any]:
     pdf = _Pdf(p, data, path)
     extra: dict[str, Any] = {}
     try:
-        if p.format == "pdf":
-            pdf.build()
-        else:
-            import doc_export
-            bl = doc_export.blocks(pdf.story())
-            writer = doc_export.write_docx if p.format == "docx" else doc_export.write_rtf
-            extra = writer(bl, pdf.meta(), path)
+        with safety.staged_file(path, p.overwrite) as tmp:
+            if p.format == "pdf":
+                pdf.build(tmp)
+            else:
+                import doc_export
+                bl = doc_export.blocks(pdf.story())
+                writer = doc_export.write_docx if p.format == "docx" else doc_export.write_rtf
+                extra = writer(bl, pdf.meta(), tmp)
     except PermissionError as exc:
         raise TableError(f"Cannot write {path}: {exc}", hint="Close the file if it is open (viewer or Word).") from exc
     return {"report": str(path), "format": p.format,

@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.21.0 - 2026-11-27
+
+Roadmap 8.3: reinforcement on concrete frame sections. 1 new action, 2 extended, 1 fix.
+- `set_frame_rebar` (ETABS, SAP2000, SAFE): the designer's reinforcement on a concrete frame section - beam (covers to
+  the bar centroids, top / bottom longitudinal areas at the I and J ends) or column (rectangular / circular pattern,
+  ties / spiral, clear cover, bar counts and size, tie size, spacing and legs, check or design) through
+  PropFrame.SetRebarBeam / SetRebarColumn; bar sizes checked against the model's rebar list; read back and compared.
+- `get_definition_details` frame_sections shows each section's reinforcement.
+- Measured: GetTypeRebar 1 = column, 2 = beam; a rectangular tied column reads back confinement 0 (all three
+  programs), a circular spiral one 2.
+- Checked in SAP2000 (ACI 318-19, named by the test as the designer would): 0.4 x 0.4 m column, 8 x 25M, f'c 30 MPa,
+  fy 420 MPa, checked under axial load only - PMM ratio 0.7000 against Pu / phi Pn,max = 0.7000 (ACI 318-19 22.4.2.1).
+- Fix: concrete column design results gave Option 'design' for 'check' and the reverse (the API's code 1 is check -
+  measured: with check bars the program reports code 1 and no required area).
+- `get_design_results` help says that SAFE / ETABS slab results include punching shear (returned since 0.14.0).
+- README: the probe runners removed in the folder clean-up are gone from the test table.
+- Not yet: ETABS concrete design combinations selected through set_design_settings read back as not selected in a
+  new model (SetComboStrength returns 0); to investigate.
+
+## 0.20.1 - 2026-11-27
+
+Second external code audit (ChatGPT) on 0.20.0, reviewed and merged selectively; offline tests 87 -> 91.
+
+- ChatGPT: `--run-chatgpt-tunnel` launches OpenAI's `tunnel-client` for one edition (`chatgpt_tunnel.py`); README
+  section added. The read tool is no longer marked read-only (exports write files) but is not destructive.
+- Case type 17 is `NonlinearStaticMultiStep` (was mislabelled; checked against the SAP2000v1 type library).
+- Whole-table edits: edit-table layout and dimensions checked; an empty table SAP2000 refuses is confirmed empty
+  through `GetAllTables`; the import receipt must have the documented layout; only import types 1-3 are editable;
+  duplicate upsert keys refused; numeric matching treats 1 and 1.0 alike but keeps 001 as text; retained, changed
+  and added rows all verified after the import, and a difference is an error; rows files limited to 5000 rows and
+  64 MB; a failed cancel after a failed import reports both errors.
+- Name lists: count and array must agree; name clashes checked case-insensitively, duplicates in one request refused.
+- `build_model_from_spec`: a step failure is a tool error (not a normal result); `software` in items must match the
+  edition; `save_as` checked up front and saved through the normal save path; names kept as text from Excel; spec
+  files size-checked; template files never overwritten; `new_model` always needs `discard_open_model` (an
+  untitled model can hold definitions).
+- Geometry: the object selection is read before the edit and restored and verified after it; an object type that
+  cannot be restored blocks the edit; merge search bounded; coordinates no longer rounded.
+- Results: output selection read strictly and restored (failures reported); result layout and size checked; only
+  code 1 with zero rows counts as "no results"; `export: none` respected for envelopes; analysis log path checked.
+- Files: every report, export, snapshot, model snapshot JSON and client config is written to a temporary file and
+  then moved into place (no half-written files); `model_snapshot_json` needs `overwrite` to replace; CSV / Excel
+  text that Excel would run as a formula is stored as text; RTF writes characters outside the basic plane correctly.
+- Client config: Codex `config.toml` edited with `tomlkit` (comments and other servers preserved), `CODEX_HOME`
+  honoured, existing entry fields kept, both clients written under a lock. New requirement: `tomlkit`.
+- Protocol: an incomplete last frame or a message mixing request and response fields is refused; pending-request
+  limit checked first. Change-log lines no longer re-attach to a program just to name the model.
+- `CSI_MCP_PROGRAM` with an unknown value is an error; `CSI_MCP_PROGRAMS` with only unknown values enables nothing;
+  action registration checks no longer use `assert`; a launched instance that disappears is never silently replaced.
+- Not taken from the audit: dropping the `(count, list)` fallback for `Set...SelectedForDisplay` and narrowing the
+  empty-table rule to code 1 (both measured on the installed versions), swapping the Excel header rows (CSI's own
+  order is field names then units), hiding the exception text, one lock shared by all editions (now one per
+  program), rewriting the client's protocol version 2025-03-26, escaping negative numbers stored as text in CSV,
+  and restore errors replacing the real error after a failed edit or read.
+
 ## 0.20.0 - 2026-11-27
 
 Reports in Word and tables to Excel, as the programs offer them. 1 new action, 2 extended.

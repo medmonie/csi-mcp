@@ -49,7 +49,10 @@ def current() -> str | None:
     """The program of this edition, or None for the all-programs development server."""
     if _forced:
         return _forced
-    env = _normal(os.environ.get("CSI_MCP_PROGRAM"))
+    raw = os.environ.get("CSI_MCP_PROGRAM", "").strip()
+    env = _normal(raw)
+    if raw and not env:
+        raise ValueError(f"Unknown CSI_MCP_PROGRAM. Select one of {', '.join(ALL)}.")
     if env:
         return env
     if getattr(sys, "frozen", False):

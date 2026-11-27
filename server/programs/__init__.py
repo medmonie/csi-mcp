@@ -40,7 +40,7 @@ def enabled() -> tuple[str, ...]:
     if unknown:
         log.warning("CSI_MCP_PROGRAMS: unknown program(s) %s ignored", sorted(unknown))
     picked = tuple(p for p in ALL if p in wanted)
-    return picked or ALL
+    return picked
 
 
 def expand(programs: str) -> tuple[str, ...]:

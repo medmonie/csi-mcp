@@ -32,3 +32,8 @@ tests/reference_models/
 CSI Solved Examples/
 tests/verify/expected_v1.py
 Claude outputs/
+
+# Cleanup holding folder (cleanup.bat): check it, then delete it
+_to_delete/
+cleanup.bat
+cleanup_log.txt

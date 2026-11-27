@@ -7,6 +7,8 @@ replicate there is a linear copy made with the create calls (what is copied is l
 """
 from __future__ import annotations
 
+import logging
+import sys
 import contextlib
 from typing import Any, Literal
 
@@ -57,8 +59,13 @@ def _collect(sap: Any, p: _TargetsP) -> dict[str, list[str]]:
 
 
 def _selection(sap: Any) -> list[tuple[int, str]]:
-    g = _try(sap, "SelectObj.GetSelected")
-    return [(int(t), str(n)) for t, n in zip(as_list(g[1]), as_list(g[2]))] if g else []
+    g = api_call("SelectObj.GetSelected", sap.SelectObj.GetSelected)
+    if len(g) != 3 or len(as_list(g[1])) != g[0] or len(as_list(g[2])) != g[0]:
+        raise CSIValidationError("Cannot snapshot the current object selection.")
+    selected = [(int(t), str(n)) for t, n in zip(as_list(g[1]), as_list(g[2]))]
+    if any(t not in TYPE_CODE for t, _ in selected):
+        raise CSIValidationError("The current selection contains an object this action cannot restore.")
+    return selected
 
 
 def _select_only(sap: Any, objs: dict[str, list[str]]) -> None:
@@ -70,12 +77,30 @@ def _select_only(sap: Any, objs: dict[str, list[str]]) -> None:
 
 
 def _restore(sap: Any, saved: list[tuple[int, str]]) -> None:
-    with contextlib.suppress(Exception):
-        sap.SelectObj.ClearSelection()
-        for t, n in saved:
-            coll = {1: "PointObj", 2: "FrameObj", 5: "AreaObj"}.get(t)
-            if coll:
-                getattr(sap, coll).SetSelected(n, True)
+    """Put the user's selection back and verify it. During a failed edit a restore problem is logged, not raised,
+    so the edit's own error is the one reported."""
+    if sys.exc_info()[0] is not None:
+        try:
+            _restore_checked(sap, saved)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger("csi.geometry").warning("selection not restored after a failed edit: %s", exc)
+        return
+    _restore_checked(sap, saved)
+
+
+def _restore_checked(sap: Any, saved: list[tuple[int, str]]) -> None:
+    api_call("Restore object selection", sap.SelectObj.ClearSelection)
+    expected = []
+    for t, collection in ((1, "PointObj"), (2, "FrameObj"), (5, "AreaObj")):
+        names = [n for typ, n in saved if typ == t]
+        if names:
+            existing = set(_names(sap, collection))
+            for n in names:
+                if n in existing:  # a merge can intentionally remove a selected point
+                    api_call("Restore object selection", getattr(sap, collection).SetSelected, n, True)
+                    expected.append((t, n))
+    if set(_selection(sap)) != set(expected):
+        raise CSIValidationError("CSI did not confirm the restored selection. Inspect the edit before retrying.")
 
 
 def _coords(sap: Any, names: list[str] | None = None) -> dict[str, tuple[float, float, float]]:
@@ -83,7 +108,7 @@ def _coords(sap: Any, names: list[str] | None = None) -> dict[str, tuple[float, 
     for n in names if names is not None else _names(sap, "PointObj"):
         c = _try(sap, "PointObj.GetCoordCartesian", n, 0.0, 0.0, 0.0)
         if c:
-            out[n] = (round(float(c[0]), 6), round(float(c[1]), 6), round(float(c[2]), 6))
+            out[n] = tuple(float(v) for v in c[:3])
     return out
 
 
@@ -132,8 +157,8 @@ def move_objects(p: MoveP) -> dict[str, Any]:
                 "units": describe_units(p.units)}
         if p.dry_run:
             return _dry(plan, model_locked=bridge.is_locked(sap))
-        snap, was_locked = _start_edit(p, sap, "before_move", "move objects")
         saved = _selection(sap)
+        snap, was_locked = _start_edit(p, sap, "before_move", "move objects")
         try:
             _select_only(sap, {**objs, "points": pts})   # the points too: ETABS / SAFE move points, not lines
             api_call("EditGeneral.Move", sap.EditGeneral.Move, *p.offset)
@@ -260,11 +285,11 @@ def replicate_objects(p: ReplicateP) -> dict[str, Any]:
                 "copies": 1 if p.mode == "mirror" else p.number, "units": describe_units(p.units)}
         if p.dry_run:
             return _dry(plan, model_locked=bridge.is_locked(sap))
-        snap, was_locked = _start_edit(p, sap, "before_replicate", "replicate objects")
+        saved = _selection(sap) if p.software == "SAP2000" else []
         before = _all_names(sap)
+        snap, was_locked = _start_edit(p, sap, "before_replicate", "replicate objects")
         extra: dict[str, Any] = {}
         if p.software == "SAP2000":
-            saved = _selection(sap)
             try:
                 _select_only(sap, objs)
                 if p.mode == "linear":
@@ -367,16 +392,25 @@ class MergeP(_EditP):
     tolerance: float = Field(gt=0, description="points closer than this are merged (length units)")
 
 
-def _close_pairs(xyz: dict[str, tuple[float, float, float]], tol: float) -> list[tuple[str, str]]:
+def _close_pairs(xyz: dict[str, tuple[float, float, float]], tol: float, preview: bool = False) -> list[tuple[str, str]]:
     """Pairs closer than tol (sorted sweep on x)."""
     items = sorted(xyz.items(), key=lambda kv: kv[1][0])
     out = []
+    comparisons = 0
     for i, (a, ca) in enumerate(items):
-        for b, cb in items[i + 1:]:
+        for j in range(i + 1, len(items)):
+            b, cb = items[j]
             if cb[0] - ca[0] >= tol:
                 break
+            comparisons += 1
+            if comparisons > 2_000_000:
+                raise CSIValidationError("Merge search exceeds the comparison limit. Select a smaller set of points.")
             if sum((ca[k] - cb[k]) ** 2 for k in range(3)) ** 0.5 < tol:
                 out.append((a, b))
+                if preview and len(out) == 200:
+                    return out
+                if len(out) > 5000:
+                    raise CSIValidationError("Too many merge pairs. Select a smaller set of points.")
     return out
 
 
@@ -388,12 +422,15 @@ def merge_points(p: MergeP) -> dict[str, Any]:
         pts = _targets(sap, "PointObj", p.points, None, "points") if p.points else _names(sap, "PointObj")
         plan = {"points_considered": len(pts), "tolerance": p.tolerance, "units": describe_units(p.units)}
         if p.dry_run:
-            close = [list(x) for x in _close_pairs(_coords(sap, pts), p.tolerance)[:200]]
+            close = [list(x) for x in _close_pairs(_coords(sap, pts), p.tolerance, preview=True)]
             return _dry({**plan, "close_pairs": close}, model_locked=bridge.is_locked(sap))
         pairs = _close_pairs(_coords(sap, pts), p.tolerance)
-        snap, was_locked = _start_edit(p, sap, "before_merge_points", "merge points")
+        if not pairs:
+            return {**plan, "close_pairs": 0, "merged": [], "points_removed": [], "points_removed_count": 0,
+                    "model_was_unlocked": False}
         before = set(_names(sap, "PointObj"))
         saved = _selection(sap)
+        snap, was_locked = _start_edit(p, sap, "before_merge_points", "merge points")
         merged = []
         # SAP2000 27.1 (measured): Merge with all points selected merges nothing; with the close pair selected it
         # merges them but returns 1. So pair by pair, judged by which points are gone.

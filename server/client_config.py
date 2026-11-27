@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import json
 import os
-import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 import edition
+import tomlkit
+from safety import staged_file
+from windows_lock import exclusive
 
 LEGACY = "csi"     # the combined server of 0.6.0 and earlier
 
@@ -59,7 +62,7 @@ def claude_files() -> list[Path]:
 
 def _backup(path: Path) -> None:
     if path.exists():
-        path.with_name(path.name + ".bak-" + time.strftime("%Y%m%d-%H%M%S")).write_bytes(path.read_bytes())
+        path.with_name(path.name + ".bak-" + uuid.uuid4().hex).write_bytes(path.read_bytes())
 
 
 def _claude(path: Path, entry: dict[str, Any] | None) -> str:
@@ -70,7 +73,7 @@ def _claude(path: Path, entry: dict[str, Any] | None) -> str:
         raise RuntimeError(f"not valid JSON ({exc}); fix it or add the entry by hand") from None
     if not isinstance(config, dict):
         raise RuntimeError("the file is not a JSON object; add the entry by hand")
-    servers = config.get("mcpServers") or {}
+    servers = config.get("mcpServers", {})
     if not isinstance(servers, dict):
         raise RuntimeError('"mcpServers" is not an object; add the entry by hand')
     key = name()
@@ -81,19 +84,24 @@ def _claude(path: Path, entry: dict[str, Any] | None) -> str:
         _backup(path)
         del servers[key]
     else:
-        if servers.get(key) == entry and not legacy:
+        previous = servers.get(key, {})
+        if not isinstance(previous, dict):
+            raise RuntimeError("Existing MCP entry is not an object")
+        updated = {**previous, **entry}
+        if "args" not in entry:
+            updated.pop("args", None)
+        if updated == previous and not legacy:
             return "already configured"
         _backup(path)
-        servers[key] = entry
+        servers[key] = updated
         if legacy:
             del servers[LEGACY]
     config["mcpServers"] = servers
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    with staged_file(path, overwrite=True) as tmp:
+        tmp.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     check = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {})
-    if (entry is None and key in check) or (entry is not None and check.get(key) != entry):
+    if check != servers:
         raise RuntimeError("written but not found when read back")
     return "removed" if entry is None else ("configured (old combined csi entry removed)" if legacy else "configured")
 
@@ -109,23 +117,31 @@ def codex_lines(entry: dict[str, Any], key: str | None = None) -> list[str]:
 
 def _codex(path: Path, entry: dict[str, Any] | None) -> str:
     key = name()
-    drop = {key} | ({LEGACY} if entry is not None and key != LEGACY else set())
-    kept, inside, had = [], False, False
-    for line in path.read_text(encoding="utf-8-sig").splitlines():
-        t = line.strip()
-        if t.startswith("["):
-            inside = any(t == f"[mcp_servers.{k}]" or t.startswith(f"[mcp_servers.{k}.") for k in drop)
-            had = had or inside
-        if not inside:
-            kept.append(line)
-    if entry is None and not had:
-        return f"no {key} entry"
-    while kept and not kept[-1].strip():
-        kept.pop()
-    if entry is not None:
-        kept += [""] + codex_lines(entry)
+    original = path.read_text(encoding="utf-8-sig")
+    doc = tomlkit.parse(original)
+    servers = doc.setdefault("mcp_servers", tomlkit.table())
+    if entry is None:
+        if key not in servers:
+            return f"no {key} entry"
+        del servers[key]
+    else:
+        target = servers.setdefault(key, tomlkit.table())
+        target["command"] = entry["command"]
+        if entry.get("args"):
+            target["args"] = entry["args"]
+        else:
+            target.pop("args", None)
+        target.setdefault("env", tomlkit.table()).setdefault("CSI_MCP_SPLIT", "1")
+        if key != LEGACY:
+            servers.pop(LEGACY, None)
+    revised = tomlkit.dumps(doc)
+    if revised == original:
+        return "already configured"
+    if tomlkit.parse(revised).unwrap() != doc.unwrap():
+        raise RuntimeError("TOML round-trip validation failed")
     _backup(path)
-    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    with staged_file(path, overwrite=True) as tmp:
+        tmp.write_text(revised, encoding="utf-8")
     return "removed" if entry is None else "configured"
 
 
@@ -137,14 +153,16 @@ def run(entry: dict[str, Any] | None) -> int:
         print("Claude Desktop: not installed for this user (no Claude folder or app found)")
     for path in files:
         try:
-            print(f"Claude Desktop: {_claude(path, entry)}: {path}")
+            with exclusive("client-config"):
+                print(f"Claude Desktop: {_claude(path, entry)}: {path}")
         except Exception as exc:  # noqa: BLE001 - report every client, then fail at the end
             failed += 1
             print(f"Claude Desktop: FAILED: {path}: {exc}")
-    codex = (_env("USERPROFILE") or Path.home()) / ".codex" / "config.toml"
+    codex = (_env("CODEX_HOME") or ((_env("USERPROFILE") or Path.home()) / ".codex")) / "config.toml"
     if codex.exists():
         try:
-            print(f"Codex: {_codex(codex, entry)}: {codex}")
+            with exclusive("client-config"):
+                print(f"Codex: {_codex(codex, entry)}: {codex}")
         except Exception as exc:  # noqa: BLE001
             failed += 1
             print(f"Codex: FAILED: {codex}: {exc}")

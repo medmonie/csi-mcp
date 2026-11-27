@@ -43,8 +43,11 @@ def _check_points(sap: Any, ends: list[str | list[float]]) -> None:
 
 
 def _new_names(sap: Any, coll: str, names: list[str], replace: bool = False) -> None:
-    have = set(bridge.try_name_list(sap, [coll])[0] or [])
-    clash = sorted({n for n in names if n} & have)
+    have = {n.casefold() for n in bridge.name_list(sap, coll)}
+    requested = [n.casefold() for n in names if n]
+    if len(set(requested)) != len(requested):
+        raise CSIValidationError("Duplicate names in this request.")
+    clash = sorted(set(requested) & have)
     if clash and not replace:
         raise CSIValidationError(f"Names already used: {clash[:20]}.", hint="Give other names, or leave them empty.")
 

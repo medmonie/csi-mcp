@@ -275,11 +275,14 @@ def action(name: str, summary: str, group: str, kind: Literal["read", "edit"], p
            long_running: bool = False, programs: str = "ESF", options: dict[str, dict[str, str]] | None = None,
            fields: dict[str, str] | None = None) -> Callable:
     """Summaries and field descriptions may hold [[EF: text]]: shown only in those programs' editions."""
-    assert programs and set(programs) <= set("ESF"), programs
+    if not programs or set(programs) - set("ESF"):
+        raise ValueError(f"{name}: invalid program mask {programs!r}")
     for f in list(options or {}) + list(fields or {}):
-        assert f in params.model_fields, f"{name}: unknown field {f}"
+        if f not in params.model_fields:
+            raise ValueError(f"{name}: unknown field {f}")
     def register(fn: Callable[[Any], dict[str, Any]]) -> Callable:
-        assert name not in ACTIONS, f"{name} registered twice"
+        if name in ACTIONS:
+            raise ValueError(f"{name} registered twice")
         ACTIONS[name] = Action(name, summary, group, kind, params, fn, long_running, programs, dict(options or {}),
                                dict(fields or {}))
         return fn
@@ -717,14 +720,18 @@ def set_analysis_options(p: AnalysisOptionsP) -> dict[str, Any]:
         "each case. Blocks until the solver finishes.", "Analysis", "edit", AnalysisP, long_running=True)
 def run_analysis(p: AnalysisP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
+    flags = api_call("Analyze.GetRunCaseFlag", sap.Analyze.GetRunCaseFlag)
+    if len(flags) != 3 or flags[0] != len(flags[1] or ()) or flags[0] != len(flags[2] or ()):
+        raise CSIApiError("Analyze.GetRunCaseFlag", detail="inconsistent case flags")
+    to_run = [str(n) for n, f in zip(flags[1] or (), flags[2] or ()) if f]
     if p.dry_run:
         path = bridge.model_filename(sap, p.software)
-        flags = api_call("Analyze.GetRunCaseFlag", sap.Analyze.GetRunCaseFlag)
-        to_run = [str(n) for n, f in zip(flags[1] or (), flags[2] or ()) if f]
         problems = ([] if path else ["the model has never been saved"]) + ([] if to_run else ["no case set to run"])
         return _dry({"save_first": p.save_before_run, "snapshot_first": p.snapshot, "run_cases": to_run,
                      "replaces_existing_results": bool(bridge.is_locked(sap))}, model_file=path or None,
                     problems=problems)
+    if not to_run:
+        raise CSIValidationError("No analysis cases are selected to run.")
     snap = _take_snapshot(p.software, sap, "before_analysis") if p.snapshot else None
     if p.save_before_run:
         path = bridge.save_model(p.software)
@@ -733,12 +740,6 @@ def run_analysis(p: AnalysisP) -> dict[str, Any]:
         if not path:
             raise CSIValidationError("The model has never been saved; the program needs a file to analyse.",
                                      hint="Save it first: open_or_save_model with action='save' and a file_path.")
-    flags = api_call("Analyze.GetRunCaseFlag", sap.Analyze.GetRunCaseFlag)
-    if len(flags) != 3 or flags[0] != len(flags[1] or ()) or flags[0] != len(flags[2] or ()):
-        raise CSIApiError("Analyze.GetRunCaseFlag", detail="inconsistent case flags")
-    to_run = [str(n) for n, f in zip(flags[1] or (), flags[2] or ()) if f]
-    if not to_run:
-        raise CSIValidationError("No analysis cases are selected to run.")
     t0 = time.perf_counter()
     run_error = None
     try:
@@ -846,7 +847,12 @@ def query_database_table(p: QueryP) -> dict[str, Any]:
     out = records(df, p.max_rows)
     export_path = None
     if p.export in ("csv", "xlsx", "json") or (p.export == "auto" and len(df) > p.max_rows):
-        export_path = str(safety.export_frame(df, f"{p.software}_{key}", p.export if p.export != "auto" else "csv"))
+        try:
+            export_path = str(safety.export_frame(df, f"{p.software}_{key}", p.export if p.export != "auto" else "csv"))
+        except OSError:
+            if p.export != "auto":
+                raise TableError("Cannot write the requested table export. Check the CSI_MCP_OUTPUT directory.")
+            warnings.append("Automatic CSV export failed. Check the CSI_MCP_OUTPUT directory.")
     return {"export_path": export_path, "table_key": key, "table_version": version, "units": describe_units(p.units), "columns": list(df.columns),
             "total_rows": total, "rows_after_filters": int(len(df)), "returned_rows": len(out),
             "truncated": len(df) > p.max_rows, "filters_applied": applied,
@@ -911,4 +917,5 @@ import sap_objects  # noqa: E402,F401 - registers SAP2000 cables, solids, tendon
 import sap_analysis  # noqa: E402,F401 - registers staged construction, hinges, moving loads
 import results  # noqa: E402,F401 - registers the Phase 2 results actions
 import report  # noqa: E402,F401 - registers export_report (report.py builds on the actions above)
+import rebar  # noqa: E402,F401 - registers set_frame_rebar
 import excel_export  # noqa: E402,F401 - registers export_tables_to_excel

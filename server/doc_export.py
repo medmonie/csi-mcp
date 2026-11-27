@@ -396,7 +396,9 @@ def _rtf(text: str) -> str:
         elif o < 128:
             out.append(ch)
         else:
-            out.append(f"\\u{o if o < 32768 else o - 65536}?")
+            encoded = ch.encode("utf-16-le", errors="surrogatepass")
+            for i in range(0, len(encoded), 2):
+                out.append(f"\\u{int.from_bytes(encoded[i:i+2], 'little', signed=True)}?")
     return "".join(out)
 
 

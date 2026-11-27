@@ -140,7 +140,7 @@ LOAD_CASE_TYPES = {
     5: "LinearHistory", 6: "NonlinearHistory", 7: "LinearDynamic", 8: "NonlinearDynamic",
     9: "MovingLoad", 10: "Buckling", 11: "SteadyState", 12: "PowerSpectralDensity",
     13: "LinearStaticMultiStep", 14: "HyperStatic", 15: "ExternalResults",
-    16: "StagedConstruction", 17: "NonlinearStagedConstruction",
+    16: "StagedConstruction", 17: "NonlinearStaticMultiStep",
 }
 CASE_STATUS = {1: "NotRun", 2: "CouldNotStart", 3: "NotFinished", 4: "Finished"}
 
@@ -547,7 +547,7 @@ class CSIBridge:
             return self._pinned[spec.name]
         conn = self._connections.get(spec.name)
         if not conn or not self._probe(conn.api_object):
-            if conn and self._editing:
+            if conn and (self._editing or conn.launched_by_bridge):
                 raise CSIConnectionError("Previous CSI instance is unavailable. Check model status before editing.")
             conn = self.connect(spec.name)
         if self._pinned is not None:
@@ -556,6 +556,10 @@ class CSIBridge:
 
     def sap_model(self, software: str) -> Any:
         return self.connection(software).sap_model
+
+    def cached_filename(self, software: str) -> str | None:
+        conn = self._connections.get(software)
+        return (self.model_filename(conn.sap_model, software) or None) if conn else None
 
     def disconnect(self, software: str, close_application: bool = False, save_model: bool = False) -> dict:
         spec = self.spec(software)
@@ -697,8 +701,12 @@ class CSIBridge:
         """GetNameList() for SapModel.<collection> (e.g. 'PropFrame', 'LoadCases')."""
         obj = getattr(sap, collection)
         outs = api_call(f"{collection}.GetNameList", obj.GetNameList)
-        names = outs[1] if len(outs) >= 2 else (outs[0] if outs else [])
-        return [str(n) for n in as_list(names) if n is not None]
+        if len(outs) != 2 or type(outs[0]) is not int:
+            raise CSIApiError(f"{collection}.GetNameList", detail="unexpected name-list layout")
+        names = [str(n) for n in as_list(outs[1]) if n not in (None, "")]
+        if len(names) != outs[0]:
+            raise CSIApiError(f"{collection}.GetNameList", detail="name count differs from the returned array")
+        return names
 
     def try_name_list(self, sap: Any, collections: Sequence[str]) -> tuple[list[str] | None, str | None]:
         """First collection that answers GetNameList, else (None, error)."""

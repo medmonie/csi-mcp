@@ -122,7 +122,7 @@ def export_tables_to_excel(p: ExcelP) -> dict[str, Any]:
             ws.append([f"Units: {units_text}  |  Cases / combinations: "
                        f"{', '.join(p.load_cases_or_combos) if p.load_cases_or_combos else 'all'}"])
             cols = list(df.columns)
-            ws.append(cols)
+            ws.append(cols)                                # CSI's own export order: field names, then units
             ws.append([meta.get(c, "") for c in cols])
             for c in ws[4]:
                 c.font, c.fill = bold, head_fill
@@ -146,8 +146,13 @@ def export_tables_to_excel(p: ExcelP) -> dict[str, Any]:
     index.column_dimensions["B"].width = 34
     index.column_dimensions["D"].width = 60
     try:
-        wb.save(path)
+        # All CSI-provided strings in this workbook are data, including strings beginning with '='.
+        safety.literal_cells(wb)
+        with safety.staged_file(path, p.overwrite) as tmp:
+            wb.save(tmp)
     except PermissionError as exc:
         raise TableError(f"Cannot write {path}: {exc}", hint="Close the workbook if it is open in Excel.") from exc
+    finally:
+        wb.close()
     return {"workbook": str(path), "sheets": out, "units": units,
             "cases_or_combos": p.load_cases_or_combos or "all", "warnings": warnings}

@@ -25,7 +25,7 @@ from typing import Any
 # Reserve the original pipe before importing SDKs or native COM libraries. This
 # also catches native writes to fd 1 and leaves one stable protocol writer.
 _wire = None
-if __name__ == "__main__" and not {"--configure-clients", "--remove-clients", "-h", "--help"} & set(sys.argv[1:]):
+if __name__ == "__main__" and not {"--configure-clients", "--remove-clients", "--run-chatgpt-tunnel", "-h", "--help"} & set(sys.argv[1:]):
     _wire = os.fdopen(os.dup(sys.stdout.fileno()), "wb")
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
 
@@ -108,7 +108,7 @@ def dispatch(action: str, params: dict[str, Any] | None, allow_read: bool = True
     if not catalog.available(act):
         raise ValueError(f"'{name}' is not offered by this server (CSI_MCP_PROGRAMS={','.join(programs.enabled())}).")
     logged = act.kind == "edit" and not getattr(validated, "dry_run", False)
-    with exclusive(f"model-access-{edition.server_name()}"), bridge.action_scope(act.kind == "edit" and name != "connect"):
+    with exclusive(f"model-access-{getattr(validated, 'software', None) or edition.server_name()}"), bridge.action_scope(act.kind == "edit" and name != "connect"):
         try:
             result = act.run(validated)
         except Exception as exc:
@@ -126,7 +126,7 @@ def _log_edit(name: str, params: Any, ok: bool, outcome: Any) -> None:
     model = None
     if software:
         with contextlib.suppress(Exception):
-            model = bridge.model_filename(bridge.sap_model(software), software) or None
+            model = bridge.cached_filename(software)
     safety.log_change({"action": name, "software": software, "model": model, "ok": ok,
                        "params": params.model_dump(), "outcome": outcome})
 
@@ -190,7 +190,7 @@ async def run_action(ctx: Context | None, action: str, params: dict[str, Any] | 
 
 # --------------------------------------------------------------------------- tools
 
-READ_TOOL = ToolAnnotations(title="CSI (read models and results)", readOnlyHint=True, destructiveHint=False,
+READ_TOOL = ToolAnnotations(title="CSI (read models and export files)", readOnlyHint=False, destructiveHint=False,
                             openWorldHint=False)
 EDIT_TOOL = ToolAnnotations(title="CSI", readOnlyHint=False, destructiveHint=True, idempotentHint=False,
                             openWorldHint=False)
@@ -208,7 +208,7 @@ def create_server(chatgpt: bool = False) -> FastMCP:
 
         @mcp.tool(name=read_name, description=catalog.tool_description("read") if not chatgpt else
                   f"Read {label} models and analysis results. Call help to list actions and parameter schemas. "
-                  f"Table reads temporarily change {label} display units and selection.", annotations=read_ann)
+                  f"Table reads can change {label} display settings. Export actions write files.", annotations=read_ann)
         async def tool_read(action: str, ctx: Context, params: dict[str, Any] | None = None) -> Any:
             return await run_action(ctx, action, params, allow_read=True, allow_edit=False)
 
@@ -240,12 +240,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="serve this program only (the packaged exes take it from their name)")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--chatgpt", action="store_true", help="serve split CSI tools over stdio for Secure MCP Tunnel")
+    modes.add_argument("--run-chatgpt-tunnel", action="store_true", help="run OpenAI tunnel-client for this edition")
     modes.add_argument("--configure-clients", nargs="?", const="", metavar="COMMAND",
                         help="add this server to Claude Desktop and Codex (COMMAND default: this server)")
     modes.add_argument("--remove-clients", action="store_true", help="remove it from Claude Desktop and Codex")
     args = parser.parse_args(argv)
     if args.program:
         edition.force(args.program)
+    if args.run_chatgpt_tunnel:
+        import chatgpt_tunnel
+        return chatgpt_tunnel.run(edition.current())
     if args.configure_clients is not None or args.remove_clients:
         import client_config
         if args.remove_clients:

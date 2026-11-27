@@ -13,16 +13,19 @@ Results tables (import type 0) are refused; import type 2 tables need an unlocke
 from __future__ import annotations
 
 import math
+from collections import Counter
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
 from actions import (
-    ALLOW_UNLOCK, DRY_RUN, SNAPSHOT, SOFTWARE, UNITS, Params, _dry, _lock, _refresh_view, _take_snapshot, action, bridge,
+    ALLOW_UNLOCK, DRY_RUN, SNAPSHOT, SOFTWARE, UNITS, ActionFailed, Params, _dry, _lock, _refresh_view, _take_snapshot, action, bridge,
 )
 from csi_bridge import CSIValidationError, Software, UnitPreset, describe_units
 from db_edit import read_table, write_table
+from safety import check_input_file
 
 Value = str | float | int | bool
 PREVIEW = 20
@@ -58,7 +61,20 @@ def same(a: Any, b: Any) -> bool:
 
 
 def _matches(row: dict[str, str], match: dict[str, Any]) -> bool:
-    return all(same(row.get(k, ""), v) for k, v in match.items())
+    return all(_key(row.get(k, "")) == _key(v) for k, v in match.items())
+
+
+def _key(value: Any):
+    text = _txt(value).strip().casefold()
+    # A string label such as 001 must remain distinct from a numeric ID.
+    digits = text.lstrip("+-")
+    if len(digits) > 1 and digits[0] == "0" and digits[1].isdigit():
+        return text
+    try:
+        number = Decimal(text)
+        return number if number.is_finite() else text
+    except InvalidOperation:
+        return text
 
 
 class RowUpdate(Params):
@@ -113,12 +129,15 @@ def _file_rows(path: str, sheet: str | None) -> list[dict[str, Value]]:
     f = Path(path)
     if not f.is_file():
         raise CSIValidationError(f"rows_file not found: {path}")
+    check_input_file(f)
     if f.suffix.lower() == ".csv":
-        df = pd.read_csv(f, dtype=str, keep_default_na=False)
+        df = pd.read_csv(f, dtype=str, keep_default_na=False, nrows=5001)
     elif f.suffix.lower() in (".xlsx", ".xlsm"):
-        df = pd.read_excel(f, sheet_name=sheet or 0, dtype=str, keep_default_na=False)
+        df = pd.read_excel(f, sheet_name=sheet or 0, dtype=str, keep_default_na=False, nrows=5001)
     else:
         raise CSIValidationError("rows_file must be .csv or .xlsx.")
+    if len(df) > 5000:
+        raise CSIValidationError("A table edit accepts at most 5000 imported rows per file.")
     df.columns = [str(c).strip() for c in df.columns]
     return [{k: v for k, v in r.items() if k and not k.startswith("Unnamed")} for r in df.to_dict("records")]
 
@@ -160,7 +179,7 @@ def _plan(fields: list[str], rows: list[dict[str, str]], p: TableEditP) -> dict[
             raise CSIValidationError(f"update {u.match}: {len(hit)} rows match"
                                      + (f", expected {u.expect}" if u.expect is not None else "") + ".")
         for i in hit:
-            work[i].update({k: _txt(v) for k, v in u.set.items() if not same(work[i].get(k, ""), v)})
+            work[i].update({k: _txt(v) for k, v in u.set.items() if _key(work[i].get(k, "")) != _key(v)})
             if work[i] != before[i]:
                 status[i] = "changed"
     upserts = list(p.upsert_rows)
@@ -170,6 +189,7 @@ def _plan(fields: list[str], rows: list[dict[str, str]], p: TableEditP) -> dict[
         (upserts if p.key_fields else adds).extend(frows)
     if p.key_fields:
         check_fields(p.key_fields, "key_fields")
+    seen_keys = set()
     added: list[dict[str, str]] = []
     for r in upserts:
         check_fields(r, "upsert row")
@@ -177,12 +197,16 @@ def _plan(fields: list[str], rows: list[dict[str, str]], p: TableEditP) -> dict[
         if missing:
             raise CSIValidationError(f"upsert row {r}: key fields {missing} missing.")
         key = {k: r[k] for k in p.key_fields}
+        ident = tuple(_key(v) for v in key.values())
+        if ident in seen_keys:
+            raise CSIValidationError("Duplicate upsert key in this request.")
+        seen_keys.add(ident)
         hit = [i for i, w in enumerate(work) if status[i] != "deleted" and _matches(w, key)]
         if len(hit) > 1:
             raise CSIValidationError(f"upsert {key}: {len(hit)} rows match; key_fields must identify one row.")
         if hit:
             i = hit[0]
-            work[i].update({k: _txt(v) for k, v in r.items() if not same(work[i].get(k, ""), v)})
+            work[i].update({k: _txt(v) for k, v in r.items() if _key(work[i].get(k, "")) != _key(v)})
             if work[i] != before[i]:
                 status[i] = "changed"
         else:
@@ -197,10 +221,10 @@ def _plan(fields: list[str], rows: list[dict[str, str]], p: TableEditP) -> dict[
                              if work[i].get(k, "") != before[i].get(k, "")}}
                for i, s in enumerate(status) if s == "changed"]
     deleted = [before[i] for i, s in enumerate(status) if s == "deleted"]
-    expect = [{k: work[i][k] for k in fields if work[i].get(k, "") != before[i].get(k, "")}
-              for i, s in enumerate(status) if s == "changed"]
+    expect = [work[i] for i, s in enumerate(status) if s == "changed"]
     expect += [{k: v for k, v in r.items() if v != ""} for r in added]
-    return {"rows": out, "changed": changed, "deleted": deleted, "added": added, "expect": expect,
+    return {"rows": out, "retained": [w for w,s in zip(work, status) if s == "same"],
+            "changed": changed, "deleted": deleted, "added": added, "expect": expect,
             "rows_before": len(rows), "rows_after": len(out)}
 
 
@@ -223,26 +247,35 @@ def _stale(sap: Any, key: str, fields: list[str], rows: list[dict[str, str]]) ->
     coll = NAME_SOURCES.get(key.lower())
     if not coll or not fields:
         return []
-    try:
-        api = bridge.try_name_list(sap, [coll])[0] or []
-    except Exception:  # noqa: BLE001
-        return []
+    api = bridge.name_list(sap, coll)
     held = {str(r.get(fields[0], "")).strip().lower() for r in rows}
     return [n for n in api if n.strip().lower() not in held and not n.startswith("~")]
 
 
-def _verify(after: list[dict[str, str]], expect: list[dict[str, str]]) -> dict[str, Any]:
+def _verify(after: list[dict[str, str]], expect: list[dict[str, str]], retained: list[dict[str, str]],
+            fields: list[str]) -> dict[str, Any]:
     """Every changed / added row should be found in the table read back, on the fields that were given."""
-    pool = list(after)
+    def signature(row):
+        return tuple(_key(row.get(k, "")) for k in fields)
+    wanted = Counter(signature(r) for r in retained)
+    pool = []
+    for row in after:
+        sig = signature(row)
+        if wanted[sig]:
+            wanted[sig] -= 1
+        else:
+            pool.append(row)
     missing = []
     for e in expect:
-        i = next((j for j, r in enumerate(pool) if all(same(r.get(k, ""), v) for k, v in e.items())), None)
+        i = next((j for j, r in enumerate(pool) if _matches(r, e)), None)
         if i is None:
             missing.append(e)
         else:
             pool.pop(i)
     return {"rows_checked": len(expect), "rows_verified": len(expect) - len(missing),
-            **({"not_found_after_apply": missing[:10]} if missing else {})}
+            **({"not_found_after_apply": missing[:10]} if missing else {}),
+            **({"missing_retained_rows": sum(wanted.values())} if any(wanted.values()) else {}),
+            **({"unexpected_rows": len(pool)} if pool else {})}
 
 
 @action("edit_database_table", "Read or edit any importable database table - the bulk route for definitions and "
@@ -267,7 +300,7 @@ def edit_database_table(p: TableEditP) -> dict[str, Any]:
                                           for k, v in p.where.items())]
         return {**head, "total_rows": len(rows), "matching_rows": len(sel), "returned_rows": min(len(sel), p.max_rows),
                 "truncated": len(sel) > p.max_rows, "rows": sel[:p.max_rows]}
-    if itype == 0:
+    if itype not in (1, 2, 3):
         raise CSIValidationError(f"'{key}' is a results table (not importable).")
     missing = _stale(sap, key, fields, rows)
     if missing:
@@ -296,7 +329,11 @@ def edit_database_table(p: TableEditP) -> dict[str, Any]:
     with bridge.units_scope(sap, p.units):
         res = write_table(sap, key, version, fields, pl["rows"])
         _, _, after = read_table(sap, key)
-    ver = _verify(after, pl["expect"])
+    ver = _verify(after, pl["expect"], pl["retained"], fields)
     _refresh_view(sap)
-    return {**head, **diff, "applied": True, **res, "rows_in_table_now": len(after), "verification": ver,
+    receipt = {**head, **diff, "applied": True, **res, "rows_in_table_now": len(after), "verification": ver,
             "model_was_unlocked": was_locked, **({"snapshot": snap} if snap else {})}
+    if ver.keys() - {"rows_checked", "rows_verified"}:
+        raise ActionFailed({**receipt, "message": "CSI applied the edit but the table differs from the plan.",
+                            "hint": "Inspect the table and the snapshot before retrying."})
+    return receipt

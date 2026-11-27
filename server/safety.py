@@ -14,6 +14,9 @@ import logging
 import os
 import re
 import shutil
+import tempfile
+import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +30,25 @@ def output_root() -> Path:
 
 
 def stamp() -> str:
-    return dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+
+
+@contextmanager
+def staged_file(target: Path, overwrite: bool = False):
+    """Publish a completed sibling file without truncating an existing destination on failure."""
+    fd, filename = tempfile.mkstemp(dir=target.parent, suffix=target.suffix)
+    os.close(fd)
+    tmp = Path(filename)
+    try:
+        yield tmp
+        if overwrite:
+            os.replace(tmp, target)
+        elif os.name == "nt":
+            os.rename(tmp, target)  # Windows refuses an existing destination atomically.
+        else:
+            os.link(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def safe_stem(text: str, limit: int = 60) -> str:
@@ -35,23 +56,53 @@ def safe_stem(text: str, limit: int = 60) -> str:
     return stem[:limit]
 
 
+def check_input_file(path: Path) -> None:
+    if path.stat().st_size > 64 * 1024 * 1024:
+        raise ValueError("Input exceeds the 64 MiB file limit.")
+    if path.suffix.lower() in (".xlsx", ".xlsm"):
+        with zipfile.ZipFile(path) as book:
+            if sum(entry.file_size for entry in book.infolist()) > 128 * 1024 * 1024:
+                raise ValueError("Workbook exceeds the 128 MiB uncompressed limit.")
+
+
+def _csv_text(value):
+    """Prefix text Excel would run as a formula; numbers kept as text (e.g. '-1.5', '+3') stay as they are."""
+    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")):
+        try:
+            float(value)
+            return value
+        except ValueError:
+            return "'" + value
+    return value
+
+
+def literal_cells(workbook):
+    for sheet in workbook:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    cell.data_type = "s"
+
+
 def export_frame(df: Any, stem: str, fmt: str, folder: Path | None = None) -> Path:
     """Write a DataFrame as CSV (UTF-8 with BOM, opens cleanly in Excel), XLSX (openpyxl) or JSON records."""
     folder = folder or (output_root() / "exports")
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{safe_stem(stem)}_{stamp()}.{fmt}"
-    if fmt == "csv":
-        df.to_csv(path, index=False, encoding="utf-8-sig")
-    elif fmt == "xlsx":
-        try:
-            import openpyxl  # noqa: F401
-        except ImportError as exc:
-            raise ValueError("XLSX export needs openpyxl: run setup_server.bat again (or use export csv).") from exc
-        if len(df) > 1_048_575:
-            raise ValueError(f"{len(df)} rows do not fit one Excel sheet (1,048,575); use export csv.")
-        df.to_excel(path, index=False, sheet_name=safe_stem(stem, 31))
-    else:
-        df.to_json(path, orient="records", indent=1, force_ascii=False)
+    with staged_file(path) as tmp:
+        if fmt == "csv":
+            df.map(_csv_text).rename(columns=_csv_text).to_csv(tmp, index=False, encoding="utf-8-sig")
+        elif fmt == "xlsx":
+            import pandas as pd
+            if len(df) > 1_048_575:
+                raise ValueError(f"{len(df)} rows do not fit one Excel sheet (1,048,575); use export csv.")
+            with pd.ExcelWriter(tmp, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name=safe_stem(stem, 31))
+                literal_cells(writer.book)
+        elif fmt == "json":
+            df.to_json(tmp, orient="records", indent=1, force_ascii=False, double_precision=15)
+        else:
+            raise ValueError("Unknown export format.")
     return path
 
 
@@ -74,7 +125,8 @@ def snapshot_file(model_path: str, label: str = "") -> dict[str, Any]:
     folder.mkdir(exist_ok=True)
     name = f"{src.stem}_{stamp()}" + (f"_{safe_stem(label, 40)}" if label else "") + src.suffix
     dest = folder / name
-    shutil.copy2(src, dest)
+    with staged_file(dest) as tmp:
+        shutil.copy2(src, tmp)
     saved = dt.datetime.fromtimestamp(src.stat().st_mtime).isoformat(timespec="seconds")
     return {"snapshot": str(dest), "model_file": str(src), "model_last_saved": saved,
             "note": "The snapshot is the model as last saved; changes not yet saved in the program are not in it."}

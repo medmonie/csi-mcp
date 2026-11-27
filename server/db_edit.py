@@ -10,19 +10,25 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from csi_bridge import CSIApiError, CSIValidationError, as_list
+from csi_bridge import MAX_TABLE_CELLS, CSIApiError, CSIValidationError, api_call, as_list
 
 
 def read_table(sap: Any, key: str) -> tuple[int, list[str], list[dict[str, str]]]:
     o = sap.DatabaseTables.GetTableForEditingArray(key, "", 0, [], 0, [])
-    if not isinstance(o, (list, tuple)) or len(o) < 5 or int(o[-1]) != 0 or not as_list(o[1]):
-        # SAP2000 27.1 refuses GetTableForEditingArray for a table with no rows (measured: lanes, vehicles, hinge
-        # assignments); its field keys and version then come from GetAllFieldsInTable, and the table is empty
-        f = sap.DatabaseTables.GetAllFieldsInTable(key)
-        if isinstance(f, (list, tuple)) and len(f) >= 3 and int(f[-1]) == 0 and as_list(f[2]):
-            return int(f[0]), [str(k) for k in as_list(f[2])], []
-        raise CSIApiError(f"DatabaseTables.GetTableForEditingArray('{key}')", hint="Table not in this program?")
-    version, fields, n, data = int(o[0]), [str(f) for f in as_list(o[1])], int(o[2]), [str(v) for v in as_list(o[3])]
+    if not isinstance(o, (list, tuple)) or len(o) != 5 or type(o[-1]) is not int:
+        raise CSIApiError("GetTableForEditingArray", detail="unexpected edit-table layout")
+    if o[-1] != 0:
+        # SAP2000 can refuse an empty table. Field definitions alone say nothing about its rows.
+        listing = api_call("DatabaseTables.GetAllTables", sap.DatabaseTables.GetAllTables)
+        keys = as_list(listing[1]) if len(listing) == 5 else []
+        empty = as_list(listing[4]) if len(listing) == 5 else []
+        if (len(listing) != 5 or len(keys) != len(empty) or listing[0] != len(keys) or keys.count(key) != 1
+                or empty[keys.index(key)] is not True):
+            raise CSIApiError("GetTableForEditingArray", ret=o[-1], detail="table contents could not be verified")
+        o = [0, [], 0, [], 0]
+    version, fields, n, data = o[0], as_list(o[1]), o[2], as_list(o[3])
+    if type(n) is not int or n < 0 or n * len(fields) != len(data) or len(data) > MAX_TABLE_CELLS:
+        raise CSIApiError("GetTableForEditingArray", detail="invalid or oversized edit-table dimensions")
     if n == 0:
         # an empty table can come back with stray field names (measured, SAP2000: ['Frame', 'None', 'None'] for
         # 'Lane Definition Data' after another table's edit): take its fields from GetAllFieldsInTable
@@ -31,9 +37,12 @@ def read_table(sap: Any, key: str) -> tuple[int, list[str], list[dict[str, str]]
         except Exception:  # noqa: BLE001 - keep the fields read above
             f = None
         if isinstance(f, (list, tuple)) and len(f) >= 3 and int(f[-1]) == 0 and as_list(f[2]):
-            return int(f[0]), [str(k) for k in as_list(f[2])], []
+            version, fields = f[0], as_list(f[2])
+    if (not fields or any(not isinstance(k, str) or not k.strip() for k in fields)
+            or len(set(k.casefold() for k in fields)) != len(fields)):
+        raise CSIApiError("GetTableForEditingArray", detail="invalid editing fields")
     nf = len(fields)
-    rows = [dict(zip(fields, data[i * nf:(i + 1) * nf])) for i in range(n)]
+    rows = [dict(zip(fields, ("" if v is None else str(v) for v in data[i * nf:(i + 1) * nf]))) for i in range(n)]
     return version, fields, rows
 
 
@@ -41,9 +50,13 @@ def _apply(sap: Any) -> dict[str, Any]:
     a = sap.DatabaseTables.ApplyEditedTables(True, 0, 0, 0, 0, "")
     vals = list(a) if isinstance(a, (list, tuple)) else [a]
     log = next((v for v in reversed(vals) if isinstance(v, str)), "")
-    nums = [int(v) for v in vals if isinstance(v, (int, float)) and not isinstance(v, bool)]
-    if len(vals) > 1 and isinstance(vals[-1], int) and not isinstance(vals[-1], bool) and isinstance(vals[-2], str):
-        nums = nums[:-1]     # (fatal, errors, warnings, info, log, return code): the last number is the return code
+    if len(vals) == 6:
+        ret = vals.pop()
+        if type(ret) is not int or ret != 0:
+            raise CSIApiError("ApplyEditedTables", ret=ret, hint="Inspect the model before retrying the import.")
+    if len(vals) != 5 or not isinstance(vals[-1], str) or any(type(v) is not int or v < 0 for v in vals[:4]):
+        raise CSIApiError("ApplyEditedTables", detail="unrecognized import receipt; inspect the model")
+    nums = vals[:4]
     lines = [ln.strip() for ln in log.splitlines() if ln.strip()]
     # the log header always holds 'Import Control for Errors: Abort import after 20 errors' - not an error. The counts
     # ApplyEditedTables returns decide; error text is only lines that start with ERROR / FATAL (measured, ETABS 23.2).
@@ -56,7 +69,7 @@ def _apply(sap: Any) -> dict[str, Any]:
     # SAP2000 counts 'field was not found; default values will be used' (a field left out of a new row) as an
     # error although it imports the row with the program's values (measured) - that is the intended behaviour here
     soft = [b for b in bad if "default values will be used" in b.lower()]
-    if soft and len(soft) == len(bad):
+    if soft and len(soft) == len(bad) == counts["errors"] and counts["fatal"] == 0:
         return {"import_counts": counts, "program_defaults_used": soft[:10]}
     if bad or counts.get("fatal") or counts.get("errors"):
         raise CSIApiError("DatabaseTables.ApplyEditedTables", detail=" | ".join(bad[:6] or lines[-6:]),
@@ -68,17 +81,17 @@ def _apply(sap: Any) -> dict[str, Any]:
 def write_table(sap: Any, key: str, version: int, fields: list[str], rows: list[dict[str, str]]) -> dict[str, Any]:
     """Set the whole table (rows in field order) and apply it; cancels the pending edit when the set is refused."""
     flat = [str(r.get(f, "")) for r in rows for f in fields]
-    s = sap.DatabaseTables.SetTableForEditingArray(key, version, fields, len(rows), flat)
-    if not isinstance(s, (list, tuple)) or int(s[-1]) != 0:
-        sap.DatabaseTables.CancelTableEditing()
-        raise CSIApiError(f"DatabaseTables.SetTableForEditingArray('{key}')")
     try:
+        api_call(f"DatabaseTables.SetTableForEditingArray('{key}')", sap.DatabaseTables.SetTableForEditingArray,
+                 key, version, fields, len(rows), flat)
         return _apply(sap)
-    except CSIApiError:
+    except Exception as failure:
         try:
-            sap.DatabaseTables.CancelTableEditing()
-        except Exception:  # noqa: BLE001 - the apply error is the one to report
-            pass
+            api_call("CancelTableEditing", sap.DatabaseTables.CancelTableEditing)
+        except Exception as cleanup:
+            raise CSIApiError("CancelTableEditing", detail=f"import failed ({failure}) and the pending edit could not "
+                              f"be cancelled ({cleanup})",
+                              hint="Inspect the CSI import session before making another edit.") from failure
         raise
 
 

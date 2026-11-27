@@ -16,7 +16,7 @@ MAX_RESPONSE = 8 << 20
 
 def _read_frame(stream: BinaryIO) -> bytes | None:
     line = stream.readline(MAX_FRAME + 1)
-    if len(line) > MAX_FRAME:
+    if line and (len(line) > MAX_FRAME or not line.endswith(b"\n")):
         while line and not line.endswith(b"\n"):
             line = stream.readline(MAX_FRAME + 1)
         return None
@@ -55,7 +55,7 @@ async def serve(server, tool_names: set[str], stdin: BinaryIO, stdout: BinaryIO)
                 if line == b"":
                     return
                 if line is None:
-                    await error(None, -32600, "MCP frame exceeds the size limit")
+                    await error(None, -32600, "Incomplete or oversized MCP frame")
                     continue
                 try:
                     msg = json.loads(line.decode("utf-8"), parse_constant=_invalid_constant)
@@ -72,6 +72,10 @@ async def serve(server, tool_names: set[str], stdin: BinaryIO, stdout: BinaryIO)
                 notification = "id" not in msg
                 if not isinstance(method, str) or (not notification and type(rid) not in (int, str)):
                     await error(None, -32600, "Invalid request")
+                    continue
+                if "result" in msg or "error" in msg:
+                    if not notification:
+                        await error(rid, -32600, "Mixed request and response fields")
                     continue
                 if not notification and method not in methods:
                     await error(rid, -32601, "Method not found")
@@ -94,6 +98,9 @@ async def serve(server, tool_names: set[str], stdin: BinaryIO, stdout: BinaryIO)
                     elif state != "ready" or method == "notifications/initialized":
                         continue
                 else:
+                    if len(pending) >= 64:
+                        await error(rid, -32000, "Too many pending requests")
+                        continue
                     if rid in pending:
                         await error(rid, -32600, "Request ID already in use")
                         continue
@@ -112,9 +119,6 @@ async def serve(server, tool_names: set[str], stdin: BinaryIO, stdout: BinaryIO)
                             await error(rid, -32000, "CSI tool call rate exceeded. This call did not start.")
                             continue
                         credits -= 1
-                    if len(pending) >= 64:
-                        await error(rid, -32000, "Too many pending requests")
-                        continue
                     pending.add(rid)
                 await source.send(SessionMessage(envelope))
 

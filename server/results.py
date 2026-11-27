@@ -11,6 +11,7 @@ eigenvalues), warnings, cases solved, modes found, equations, start / complete t
 """
 from __future__ import annotations
 
+import logging
 import contextlib
 import datetime as dt
 import re
@@ -21,7 +22,8 @@ from pydantic import Field
 
 import safety
 from actions import Params, SOFTWARE, UNITS, _selection, action, bridge
-from csi_bridge import COMError, CSIError, CSIValidationError, Software, UnitPreset, api_call, as_list, describe_units
+from csi_bridge import (MAX_TABLE_CELLS, COMError, CSIApiError, CSIError, CSIValidationError, Software, UnitPreset,
+                        api_call, api_value, as_list, describe_units, split_result)
 from table_tools import TableError, py, records
 
 OBJ_HEAD = ["LoadCase", "StepType", "StepNum"]
@@ -114,6 +116,7 @@ class _OutputSetup:
         self.saved_cases: dict[str, bool] = {}
         self.saved_combos: dict[str, bool] = {}
         self.saved_opts: dict[str, int] = {}
+        self.changed = False
 
     def __enter__(self) -> "_OutputSetup":
         return self
@@ -121,37 +124,41 @@ class _OutputSetup:
     def select(self, cases: list[str], combos: list[str], step: str) -> None:
         sap, s = self.sap, self.setup
         for c in bridge.name_list(sap, "LoadCases"):
-            o = _quiet("Results.Setup.GetCaseSelectedForOutput", s.GetCaseSelectedForOutput, c)
-            if o is not None:
-                self.saved_cases[c] = bool(o[0])
-        for c in bridge.try_name_list(sap, ["RespCombo"])[0] or []:
-            o = _quiet("Results.Setup.GetComboSelectedForOutput", s.GetComboSelectedForOutput, c)
-            if o is not None:
-                self.saved_combos[c] = bool(o[0])
+            self.saved_cases[c] = bool(api_call("GetCaseSelectedForOutput", s.GetCaseSelectedForOutput, c)[0])
+        for c in bridge.name_list(sap, "RespCombo"):
+            self.saved_combos[c] = bool(api_call("GetComboSelectedForOutput", s.GetComboSelectedForOutput, c)[0])
         for opt in STEP_OPTIONS:
             o = _quiet(f"Results.Setup.GetOption{opt}", getattr(s, f"GetOption{opt}", None))
             if o is not None:
                 self.saved_opts[opt] = int(o[0])
+        self.changed = True
         api_call("Results.Setup.DeselectAllCasesAndCombosForOutput", s.DeselectAllCasesAndCombosForOutput)
         for c in cases:
             api_call("Results.Setup.SetCaseSelectedForOutput", s.SetCaseSelectedForOutput, c, True)
         for c in combos:
             api_call("Results.Setup.SetComboSelectedForOutput", s.SetComboSelectedForOutput, c, True)
         for opt in self.saved_opts:
-            _quiet(f"Results.Setup.SetOption{opt}", getattr(s, f"SetOption{opt}"), STEP[step])
+            api_call(f"Results.Setup.SetOption{opt}", getattr(s, f"SetOption{opt}"), STEP[step])
 
     def __exit__(self, *exc: Any) -> None:
         s = self.setup
-        with contextlib.suppress(Exception):
-            api_call("Results.Setup.DeselectAllCasesAndCombosForOutput", s.DeselectAllCasesAndCombosForOutput)
-        for c, sel in self.saved_cases.items():
-            if sel:
-                _quiet("Results.Setup.SetCaseSelectedForOutput", s.SetCaseSelectedForOutput, c, True)
-        for c, sel in self.saved_combos.items():
-            if sel:
-                _quiet("Results.Setup.SetComboSelectedForOutput", s.SetComboSelectedForOutput, c, True)
+        if not self.changed:
+            return
+        failures = []
+        cleared = _quiet("Restore result selection", s.DeselectAllCasesAndCombosForOutput) is not None
+        for setter, saved in ((s.SetCaseSelectedForOutput, self.saved_cases),
+                              (s.SetComboSelectedForOutput, self.saved_combos)):
+            for name, selected in saved.items():
+                if (selected or not cleared) and _quiet("Restore result selection", setter, name, selected) is None:
+                    failures.append(name)
         for opt, v in self.saved_opts.items():
-            _quiet(f"Results.Setup.SetOption{opt}", getattr(s, f"SetOption{opt}"), v)
+            if _quiet(f"Results.Setup.SetOption{opt}", getattr(s, f"SetOption{opt}"), v) is None:
+                failures.append(opt)
+        if failures:
+            if exc and exc[0] is not None:   # the read already failed: report that error, log this one
+                logging.getLogger("csi.results").warning("output settings not restored: %s", failures[:10])
+                return
+            raise TableError(f"Could not restore CSI output settings: {failures[:10]}. Check the results setup.")
 
 
 def _quiet(method: str, func: Any, *args: Any) -> list[Any] | None:
@@ -173,17 +180,14 @@ def _call(sap: Any, method: str, per_object: bool, cols: list[str], name: str | 
     """One Results call -> rows. An empty result (no rows for this selection) is returned as []."""
     func = getattr(sap.Results, method)
     args = (name, item) if per_object else ()
-    try:
-        outs = api_call(f"Results.{method}", func, *args)
-    except CSIError as exc:
-        # A non-zero return code means nothing matched this selection (e.g. no buckling case); a COM failure
-        # (no return code) is a real error.
-        if getattr(exc, "ret", None) is not None:
-            return []
-        raise
-    n = int(outs[0]) if outs else 0
-    if n == 0:
-        return []
+    ret, outs = split_result(api_value(f"Results.{method}", func, *args))
+    n = outs[0] if outs else None
+    if type(n) is not int or n < 0 or len(outs) < 1 + len(cols):
+        raise CSIApiError(f"Results.{method}", detail="unknown result layout")
+    if n * len(cols) > MAX_TABLE_CELLS:
+        raise TableError("Result exceeds the processing limit. Select fewer objects or cases.")
+    if type(ret) is not int or (ret != 0 and not (ret == 1 and n == 0)):
+        raise CSIApiError(f"Results.{method}", ret=ret)
     arrays = [as_list(outs[i]) for i in range(1, 1 + len(cols))]
     if any(len(a) != n for a in arrays):
         raise CSIValidationError(f"Results.{method}: arrays do not have {n} items each.")
@@ -200,8 +204,10 @@ def read_results(sap: Any, software: str, rt: str, cases: list[str], combos: lis
         out.select(cases, combos, step)
         rows: list[list[Any]] = []
         if per_object and names:
-            for n in names:
+            for n in dict.fromkeys(names):
                 rows += _call(sap, method, True, cols, n, ITEM_OBJECT)
+                if len(rows) * len(cols) > MAX_TABLE_CELLS:
+                    raise TableError("Combined results exceed the processing limit. Select fewer objects.")
         elif per_object:
             rows = _call(sap, method, True, cols, group or _all_group(sap), ITEM_GROUP)
         else:
@@ -268,7 +274,7 @@ def get_results(p: ResultsP) -> dict[str, Any]:
         env = g.max().add_suffix("_max").join(g.min().add_suffix("_min")).reset_index()
         res["envelope_by_object"] = {"by": obj_col, "count": int(len(env)), "rows": records(env, p.max_rows),
                                      "truncated": len(env) > p.max_rows}
-        if len(env) > p.max_rows:
+        if len(env) > p.max_rows and p.export != "none":
             res["envelope_by_object"]["export_path"] = str(safety.export_frame(
                 env, f"{p.software}_{p.result_type}_envelope", "csv" if p.export in ("auto", "none") else p.export))
     shown = df
@@ -372,6 +378,8 @@ def parse_log(text: str, max_lines: int = 60) -> dict[str, Any]:
 def get_analysis_log(p: LogP) -> dict[str, Any]:
     if p.model_path:
         model = Path(p.model_path).expanduser()
+        if model.suffix.lower() not in bridge.spec(p.software).model_extensions or not model.is_file():
+            raise CSIValidationError("model_path must be an existing model for the selected program.")
     else:
         name = bridge.model_filename(bridge.sap_model(p.software), p.software)
         if not name:
@@ -382,6 +390,7 @@ def get_analysis_log(p: LogP) -> dict[str, Any]:
     for ext in (".LOG", ".OUT"):
         f = model.with_suffix(ext)
         if f.is_file():
+            safety.check_input_file(f)
             out["files"][ext[1:]] = {"path": str(f), "modified": _mtime(f)}
             if ext == ".LOG":
                 log = f

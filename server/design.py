@@ -396,7 +396,7 @@ def concrete_results(sap: Any, calls: list[tuple[str, int]]) -> tuple[list[dict[
                  it)
         if o and o[0]:
             for i in range(int(o[0])):
-                cols.append({"Frame": str(_arr(o, 1)[i]), "Option": {1: "design", 2: "check"}.get(
+                cols.append({"Frame": str(_arr(o, 1)[i]), "Option": {1: "check", 2: "design"}.get(
                     int(_arr(o, 2)[i]), str(_arr(o, 2)[i])), "Location": float(_arr(o, 3)[i]),
                     "PMMCombo": str(_arr(o, 4)[i]), "PMMArea": float(_arr(o, 5)[i]),
                     "PMMRatio": float(_arr(o, 6)[i]), "VMajorCombo": str(_arr(o, 7)[i]),
@@ -497,7 +497,7 @@ def gather_results(sap: Any, sw: str, kind: str, names: list[str] | None, group:
 @action("get_design_results", "Design results per member from the program's design (run_design first): steel D/C "
         "ratios with type, location, governing combination, design section, errors / warnings; concrete beam "
         "rebar areas (top, bottom, shear, torsion) and column PMM area or D/C ratio and shear rebar[[EF:; slab "
-        "strip flexure and shear]][[E:; shear wall piers]]. States the code, combinations and units; exports to "
+        "strip flexure and shear, and punching shear]][[E:; shear wall piers]]. States the code, combinations and units; exports to "
         "CSV / XLSX.", "Design", "read", ResultsP,
         options={"kind": {"concrete_slab": "EF", "composite_beam": "EF", "shear_wall": "E"}})
 def get_design_results(p: ResultsP) -> dict[str, Any]:

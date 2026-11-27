@@ -48,15 +48,11 @@ class _DefP(Params):
     snapshot: bool = SNAPSHOT
 
 
-def _exists(sap: Any, collection: str, name: str) -> bool:
-    return name in (bridge.try_name_list(sap, [collection])[0] or [])
-
-
 def _check_new(sap: Any, collection: str, name: str, replace: bool, kind: str) -> bool:
     """True when the name exists (and replace allows changing it); refuses an existing name without replace."""
-    there = _exists(sap, collection, name)
+    names = bridge.name_list(sap, collection)
+    there = name in names
     if not there:
-        names = bridge.try_name_list(sap, [collection])[0] or []
         twin = next((n for n in names if n.lower() == name.lower()), None)
         if twin is not None:     # ETABS / SAFE refuse 'DEAD' next to 'Dead' (measured: LoadPatterns.Add -> 1)
             raise CSIValidationError(f"{kind} '{twin}' exists; names differing only in upper / lower case clash.",

@@ -262,6 +262,7 @@ class SoftwareOnlyP(Params):
 
 class SnapshotJsonP(Params):
     software: Software = SOFTWARE
+    overwrite: bool = Field(default=False, description="replace an existing snapshot at output_path")
     output_path: str | None = Field(default=None, description="full path of the .json; default: Documents\\CsiMcp\\"
                                                               "exports\\<model>_model_<date-time>.json")
     include_assignments: bool = Field(default=True, description="also every object's assignments and loads")
@@ -662,6 +663,13 @@ def read_frame_sections(sap: Any, sw: str, names: list[str] | None) -> list[dict
         rec["material"] = str(m[0]) if m else ""
         sm = _try(sap, "PropFrame.GetModifiers", rec["name"], [0.0] * 8) or \
             _try(sap, "PropFrame.GetModifiers", rec["name"])
+        try:
+            from rebar import read_rebar
+            rb = read_rebar(sap, rec["name"]) if rec.get("material") else None
+        except Exception:  # noqa: BLE001 - reinforcement is optional information
+            rb = None
+        if rb:
+            rec["rebar"] = rb
         if sm and any(abs(float(v) - 1) > 1e-12 for v in as_list(sm[0])):
             rec["modifiers"] = dict(zip(("A", "AS2", "AS3", "J", "I22", "I33", "Mass", "Weight"),
                                         (_r(v) for v in as_list(sm[0]))))
@@ -920,7 +928,10 @@ def export_model_snapshot(p: SnapshotJsonP) -> dict[str, Any]:
         snap = model_snapshot(sap, p.software, p.include_assignments)
     doc = {"software": p.software, "model_file": model or None, "units": describe_units(p.units),
            "created": dt.datetime.now().isoformat(timespec="seconds"), **snap}
-    path.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
+    if path.exists() and not p.overwrite:
+        raise CSIValidationError("Snapshot already exists. Choose a new path or set overwrite to true.")
+    with safety.staged_file(path, p.overwrite) as tmp:
+        tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
     counts = {k: len(v) for k, v in snap.items() if isinstance(v, list)}
     if "assignments" in snap:
         counts["assignments"] = {k: len(v) for k, v in snap["assignments"].items()}
