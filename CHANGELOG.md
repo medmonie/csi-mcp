@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.23.0 - 2026-11-28
+
+Roadmap 8.5: layered shells, deck sections, material stress-strain curves and time-dependent concrete. New module
+server/area_material.py; the API was probed in each program first (tests/diag_85.py, diag_85b.py). Offline tests
+104 -> 108.
+- define_layered_shell (ETABS, SAP2000, SAFE): layers with distance from the reference surface, thickness, behaviour
+  (shell / membrane / plate), material, angle, integration points and S11 / S22 / S12 behaviour (inactive / linear /
+  nonlinear). A layered property is shell type 6 in all three programs (SAP2000 SetShell_1; ETABS / SAFE SetSlab or
+  SetWall - `use: slab | wall`), then PropArea.SetShellLayer_1, read back by GetShellLayer_1 and compared
+  (not_kept_as_given). The answer gives the layer extent (top, bottom, depth) as well.
+- define_deck_section (ETABS, SAFE): filled, unfilled or solid-slab deck through PropArea.SetDeck_1 (all fields from
+  the designer, each deck type refuses the fields it does not use), read back through GetDeck_1. Measured: the
+  program models a deck as a membrane; GetDeckSolidSlab returns the stud Fu a million times too large, so it is not
+  used.
+- set_material_stress_strain (ETABS, SAP2000, SAFE): user curve (points in increasing strain through the origin;
+  the origin is labelled A unless the designer labels points) or the program's parametric curve - concrete simple /
+  Mander, steel simple, rebar simple / Park, tendon 250 / 270 strand - with the designer's strains, final slope and
+  hysteresis type; answers with the settings and the curve the program draws (GetSSCurve). Measured: Mander curves
+  are not returned by the API (said in the answer); SAP2000 refuses the 'Concrete' hysteresis for a concrete material
+  (ETABS / SAFE take it); simple concrete is the parabola from the origin in SAP2000, while ETABS / SAFE start with
+  E e up to 0.2 f'c.
+- set_material_time_dependence (SAP2000): CEB-FIP 90 age / creep / shrinkage switches and parameters (s, RH, h,
+  beta_sc, drying start), creep integration (full or Dirichlet series) and scale factors, through
+  PropMaterial.TimeDep. Not offered in ETABS 23.2 (its TimeDep interface has no methods and its 'Material Properties
+  - Time Dependence - CEB-FIP 90' table imports with no error but keeps nothing) or SAFE 23.3 (its time-dependence
+  tables cannot be opened for editing, -96).
+- get_definition_details: area sections show their layers (layered) or deck data; concrete, steel, rebar and tendon
+  materials show their stress-strain settings and, in SAP2000, their time dependence.
+- tests/live_props85.py (run_live_props85.bat), against hand values, in SAP2000 27.1, ETABS 23.2 and SAFE 23.3:
+  cantilever strip L 4 m, b 1 m, P 10 kN, nu 0 - plain shell 0.2 m tip 0.012800 m = PL^3 / 3EI exactly; layered
+  shell of two equal 0.1 m layers 0.012769 m (-0.24 %); two-material layers (E 2.5e7 / 5e7) 0.0092855 m vs the
+  transformed section 0.0093091 m (-0.25 %), ratio to the equal layers 0.72718 vs 0.72727 - the same numbers in all
+  three programs. Filled deck 3 x 3 m self weight 23.29875 kN = 9 x [25 (0.065 + 0.075 x 0.135 / 0.3) + 0.12] in
+  ETABS and SAFE (so the rib widths are the concrete ribs). Simple concrete curve points on f'c [2 e/e0 - (e/e0)^2]
+  with the peak at (e0, f'c); simple steel hardening on Fye [1 + r e^(1-r) (Fue/Fye - 1)] (the curve uses the
+  expected strengths Fye, Fue) with yield at (Fye / E, Fye); user curve and CEB-FIP 90 parameters read back.
+
 ## 0.22.3 - 2026-11-28
 
 The open items of the 0.22.0 code audit (project note csi-mcp-audit-0.22.0.md), checked one by one and taken where

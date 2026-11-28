@@ -921,3 +921,4 @@ import report  # noqa: E402,F401 - registers export_report (report.py builds on 
 import rebar  # noqa: E402,F401 - registers set_frame_rebar
 import sections  # noqa: E402,F401 - registers non-prismatic and Section Designer sections
 import excel_export  # noqa: E402,F401 - registers export_tables_to_excel
+import area_material  # noqa: E402,F401 - registers layered shells, decks, stress-strain curves, time dependence

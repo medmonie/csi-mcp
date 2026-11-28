@@ -2087,3 +2087,122 @@ def test_0223_output_paths(tmp_path, monkeypatch):
     assert t(project / "other.json")
     with pytest.raises(CSIValidationError, match="only in"):
         t(project / "old.json", True)
+
+
+# --------------------------------------------------------------------------- 0.23.0 (roadmap 8.5)
+
+LAYERS = [{"name": "TOP", "distance": 0.05, "thickness": 0.1, "behaviour": "shell", "material": "C30", "angle": 0.0,
+           "integration_points": 2, "s11": "linear", "s22": "linear", "s12": "linear"},
+          {"name": "BOT", "distance": -0.05, "thickness": 0.1, "behaviour": "shell", "material": "C30", "angle": 0.0,
+           "integration_points": 2, "s11": "linear", "s22": "linear", "s12": "nonlinear"}]
+
+
+def test_023_layered_shell_all_programs():
+    for sw in ("SAP2000", "ETABS", "SAFE"):
+        sap = fresh(sw)
+        dry = call("define_layered_shell", {"software": sw, "name": "LAY", "layers": LAYERS, "dry_run": True})
+        assert dry["dry_run"] and dry["would"]["extent"] == {"top": 0.1, "bottom": -0.1, "depth": 0.2,
+                                                            "sum_of_layer_thicknesses": 0.2}, dry
+        assert "LAY" not in sap.PropArea.sec
+        r = call("define_layered_shell", {"software": sw, "name": "LAY", "layers": LAYERS})
+        assert "_error" not in r and r["read_back"] == LAYERS and "not_kept_as_given" not in r, r
+        assert sap.PropArea.sec["LAY"][0] == ("shell" if sw == "SAP2000" else "slab")
+        assert sap.PropArea.sec["LAY"][2] == 6
+        d = call("get_definition_details", {"software": sw, "kind": "area_sections", "names": ["LAY"]})
+        items = d.get("items") or d.get("area_sections") or []
+        assert items and items[0]["layers"] == LAYERS and "(layered)" in items[0]["kind"], d
+    sap = fresh("ETABS")
+    r = call("define_layered_shell", {"software": "ETABS", "name": "LW", "use": "wall", "layers": LAYERS})
+    assert "_error" not in r and sap.PropArea.sec["LW"][0] == "wall"
+    bad = call("define_layered_shell", {"software": "ETABS", "name": "LW", "layers": LAYERS})
+    assert bad["_error"] and "replace" in bad["hint"]
+    bad = call("define_layered_shell", {"software": "ETABS", "name": "X", "layers": [{**LAYERS[0],
+                                                                                      "material": "NOPE"}]})
+    assert bad["_error"] and "NOPE" in bad["message"]
+    bad = call("define_layered_shell", {"software": "ETABS", "name": "X", "layers": [LAYERS[0], LAYERS[0]]})
+    assert bad["_error"] and "unique" in str(bad)
+    h = call("help", {"topic": "define_layered_shell"})
+    assert "use" in h["define_layered_shell"]["params"]
+
+
+def test_023_deck_section_etabs_safe_only():
+    deck = {"deck_type": "filled", "slab_material": "C30", "deck_material": "A615Gr60", "slab_depth": 0.065,
+            "rib_depth": 0.075, "rib_width_top": 0.15, "rib_width_bottom": 0.12, "rib_spacing": 0.3,
+            "deck_shear_thickness": 0.0009, "deck_unit_weight": 0.12, "stud_diameter": 0.019, "stud_height": 0.125,
+            "stud_fu": 400000.0}
+    for sw in ("ETABS", "SAFE"):
+        sap = fresh(sw)
+        r = call("define_deck_section", {"software": sw, "name": "DK", **deck})
+        assert "_error" not in r and "not_kept_as_given" not in r, r
+        assert r["read_back"] == deck, r["read_back"]
+        d = call("get_definition_details", {"software": sw, "kind": "area_sections", "names": ["DK"]})
+        items = d.get("items") or d.get("area_sections") or []
+        assert items[0]["deck"]["rib_spacing"] == 0.3, d
+    bad = call("define_deck_section", {"software": "ETABS", "name": "D2", "deck_type": "unfilled",
+                                       "deck_material": "A615Gr60", "rib_depth": 0.07})
+    assert bad["_error"] and "rib_width_top" in str(bad)
+    bad = call("define_deck_section", {"software": "ETABS", "name": "D3", **deck, "deck_type": "solid_slab"})
+    assert bad["_error"] and "does not use" in str(bad)
+    fresh("SAP2000")
+    bad = call("define_deck_section", {"software": "SAP2000", "name": "DK", **deck})
+    assert bad["_error"]
+
+
+def test_023_stress_strain_curves():
+    sap = fresh("ETABS")
+    pts = [{"strain": -0.004, "stress": -40000.0}, {"strain": -0.002, "stress": -60000.0},
+           {"strain": 0.0, "stress": 0.0}, {"strain": 0.0002, "stress": 3000.0}]
+    r = call("set_material_stress_strain", {"software": "ETABS", "material": "C30", "curve": "user", "points": pts})
+    assert "_error" not in r and "not_kept_as_given" not in r, r
+    assert [x["point_id"] for x in r["read_back"]["points"]] == [0, 0, 1, 0] and r["read_back"]["curve"] == "user"
+    r = call("set_material_stress_strain", {"software": "ETABS", "material": "C30", "curve": "simple",
+                                            "strain_at_fc": 0.002, "ultimate_strain": 0.005, "final_slope": -0.1,
+                                            "hysteresis": "takeda"})
+    assert "_error" not in r and "not_kept_as_given" not in r, r
+    assert r["read_back"]["parameters"]["strain_at_fc"] == 0.002 and r["read_back"]["hysteresis"] == "takeda"
+    r = call("set_material_stress_strain", {"software": "ETABS", "material": "C30", "curve": "mander"})
+    assert "_error" not in r and r["read_back"]["points"] is None and "points_note" in r["read_back"], r
+    bad = call("set_material_stress_strain", {"software": "ETABS", "material": "C30", "curve": "park"})
+    assert bad["_error"] and "does not exist" in bad["message"]
+    bad = call("set_material_stress_strain", {"software": "ETABS", "material": "C30", "curve": "simple",
+                                              "strain_at_rupture": 0.2})
+    assert bad["_error"] and "do not apply" in bad["message"]
+    bad = call("set_material_stress_strain", {"software": "ETABS", "material": "C30", "curve": "user",
+                                              "points": [pts[1], pts[0], pts[2]]})
+    assert bad["_error"] and "increasing" in str(bad)
+    bad = call("set_material_stress_strain", {"software": "ETABS", "material": "C30", "curve": "user",
+                                              "points": pts[:2] + [{"strain": 0.001, "stress": 1.0}]})
+    assert bad["_error"] and "origin" in str(bad)
+    r = call("set_material_stress_strain", {"software": "ETABS", "material": "A615Gr60", "curve": "simple",
+                                            "strain_at_hardening": 0.01, "ultimate_strain": 0.09})
+    assert "_error" not in r and r["read_back"]["parameters"]["ultimate_strain"] == 0.09, r
+    sap = fresh("SAP2000")
+    sap.PropMaterial.refuse_concrete_hysteresis = True
+    bad = call("set_material_stress_strain", {"software": "SAP2000", "material": "C30", "curve": "simple",
+                                              "hysteresis": "concrete"})
+    assert bad["_error"] and "hysteresis" in str(bad)
+    d = call("get_definition_details", {"software": "SAP2000", "kind": "materials", "names": ["C30"]})
+    items = d.get("items") or d.get("materials") or []
+    assert items[0]["stress_strain"]["curve"] == "mander", d
+
+
+def test_023_time_dependence_sap_only():
+    sap = fresh("SAP2000")
+    p = {"software": "SAP2000", "material": "C30", "consider_age": True, "consider_creep": True,
+         "consider_shrinkage": True, "cement_coefficient": 0.25, "relative_humidity": 70.0, "notional_size": 0.2,
+         "shrinkage_coefficient": 5.0, "shrinkage_start_age": 3.0, "creep_integration": "dirichlet_series",
+         "series_terms": 5, "scale_factors": [1.0, 1.2, 0.8]}
+    r = call("set_material_time_dependence", p)
+    assert "_error" not in r and "not_kept_as_given" not in r, r
+    assert r["read_back"]["scale_factors"] == {"age": 1.0, "creep": 1.2, "shrinkage": 0.8}
+    assert sap.PropMaterial.TimeDep.cf["C30"][8] == 1
+    d = call("get_definition_details", {"software": "SAP2000", "kind": "materials", "names": ["C30"]})
+    items = d.get("items") or d.get("materials") or []
+    assert items[0]["time_dependence"]["relative_humidity"] == 70.0, d
+    bad = call("set_material_time_dependence", {**p, "material": "A615Gr60"})
+    assert bad["_error"] and "not concrete" in bad["message"]
+    for sw in ("ETABS", "SAFE"):
+        fresh(sw)
+        bad = call("set_material_time_dependence", {**p, "software": sw})
+        assert bad["_error"], bad
+    assert "set_material_time_dependence" not in catalog.tool_description("ETABS")

@@ -1001,6 +1001,9 @@ class _Materials(_Names):
                     "A615Gr60": {"type": 6, "iso": [199947979.0, 0.3, 1.17e-05], "w": 76.9729, "fy": 413685.0,
                                  "fu": 620528.0}}
         self.mass_source = [True, False, True, ("Dead",), (1.0,)]
+        self.curves = {}
+        self.refuse_concrete_hysteresis = False
+        self.TimeDep = _TimeDep(self)
 
     def GetMaterial(self, name, *a):
         return [self.mat[name]["type"], 0, "", "", 0] if name in self.mat else [0, 0, "", "", 1]
@@ -1037,24 +1040,58 @@ class _Materials(_Names):
         return 0
 
     def GetOConcrete_1(self, name, *a):
-        return [self.mat[name]["fc"], False, 1.0, 2, 4, 0.00221, 0.005, -0.1, 0.0, 0.0, 0]
+        m = self.mat[name]
+        return [m["fc"], *m.get("conc", (False, 1.0, 2, 4, 0.00221, 0.005, -0.1, 0.0, 0.0)), 0]
 
     def SetOConcrete_1(self, name, fc, *rest):
         assert len(rest) >= 7, rest
+        rest = list(rest[:9]) + [0.0] * (9 - len(rest[:9]))
+        if self.refuse_concrete_hysteresis and int(rest[3]) == 4:
+            return 1                    # SAP2000 27.1: no 'Concrete' hysteresis for concrete (measured)
         self.mat[name]["fc"] = fc
+        self.mat[name]["conc"] = tuple(rest)
+        if int(rest[2]) != 0:
+            self.curves.pop(name, None)
         return 0
 
     def GetOSteel_1(self, name, *a):
         m = self.mat[name]
-        return [m["fy"], m["fu"], 1.1 * m["fy"], 1.1 * m["fu"], 1, 1, 0.02, 0.14, 0.2, -0.1, 0]
+        rest = m.get("steel", (1, 1, 0.02, 0.14, 0.2, -0.1))
+        return [m["fy"], m["fu"], m.get("efy", 1.1 * m["fy"]), 1.1 * m["fu"], *rest, 0]
 
     def SetOSteel_1(self, name, fy, fu, efy, efu, *rest):
         assert len(rest) == 6, rest
-        self.mat[name].update(fy=fy, fu=fu, efy=efy)
+        self.mat[name].update(fy=fy, fu=fu, efy=efy, steel=tuple(rest))
+        if int(rest[0]) != 0:
+            self.curves.pop(name, None)
         return 0
 
     GetORebar_1 = GetOSteel_1
     SetORebar_1 = SetOSteel_1
+
+    def SetSSCurve(self, name, n, ids, strains, stresses, *a):
+        m = self.mat.get(name)
+        ss = None if m is None else (m.get("conc", (0, 0, 2))[2] if m["type"] == 2 else m.get("steel", (1,))[0])
+        if ss != 0 or len(ids) != n:
+            return [tuple(ids), tuple(strains), tuple(stresses), 1]
+        self.curves[name] = (tuple(ids), tuple(strains), tuple(stresses))
+        return [tuple(ids), tuple(strains), tuple(stresses), 0]
+
+    def GetSSCurve(self, name, *a):
+        m = self.mat.get(name)
+        if not m:
+            return [0, (), (), (), 1]
+        if name in self.curves:
+            ids, e, s = self.curves[name]
+            return [len(ids), ids, e, s, 0]
+        if m["type"] == 2:
+            ss = m.get("conc", (0, 0, 2))[2]
+            if ss == 2:
+                return [0, (), (), (), 1]          # Mander: no curve through the API (measured)
+            e0, fc = m.get("conc", (0, 0, 0, 0, 0.002))[4], m["fc"]
+            pts = [(-e0 * k / 4, -fc * (2 * k / 4 - (k / 4) ** 2)) for k in (4, 3, 2, 1)] + [(0.0, 0.0)]
+            return [len(pts), tuple([-2, 0, 0, 0, 1]), tuple(p[0] for p in pts), tuple(p[1] for p in pts), 0]
+        return [3, (-2, 1, 2), (-0.002, 0.0, 0.002), (-m.get("fy", 1.0), 0.0, m.get("fy", 1.0)), 0]
 
     def GetMassSource_1(self, *a):
         e, m, ld, pats, sfs = self.mass_source
@@ -1063,6 +1100,27 @@ class _Materials(_Names):
     def SetMassSource_1(self, e, m, ld, n, pats, sfs):
         self.mass_source = [e, m, ld, tuple(pats), tuple(sfs)]
         return [e, m, ld, 0]
+
+
+class _TimeDep:
+    def __init__(self, mats):
+        self.mats, self.cf, self.sf = mats, {}, {}
+
+    def SetConcreteCEBFIP90(self, name, *vals):
+        if name not in self.mats.mat or len(vals) < 10:
+            return 1
+        self.cf[name] = tuple(vals[:10])
+        return 0
+
+    def GetConcreteCEBFIP90(self, name, *a):
+        return [*self.cf.get(name, (False, False, False, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0)), 0]
+
+    def SetConcreteScaleFactors(self, name, a, c, s, *x):
+        self.sf[name] = (a, c, s)
+        return 0
+
+    def GetConcreteScaleFactors(self, name, *a):
+        return [*self.sf.get(name, (1.0, 1.0, 1.0)), 0]
 
 
 class _PropFrames(_Names):
@@ -1165,6 +1223,34 @@ class _PropFrames(_Names):
         self.modifiers[name] = tuple(value)
         return [tuple(value), 0]
 
+    def SetShellLayer_1(self, name, n, *arrays):
+        k = self.sec.get(name)
+        if not k or k[2] != 6 or len(arrays) != 10 or any(len(a) != n for a in arrays):
+            return [*arrays, 1]
+        self.layers[name] = tuple(tuple(a) for a in arrays)
+        return [n, *arrays, 0]
+
+    def GetShellLayer_1(self, name, *a):
+        lay = self.layers.get(name)
+        if not lay:
+            return [0, *(() for _ in range(10)), 1]
+        return [len(lay[0]), *lay, 0]
+
+    def SetDeck_1(self, name, deck_type, slab_mat, deck_mat, *nums):
+        if len(nums) < 10:
+            return 1
+        self._put(name, "deck", int(deck_type), 3, slab_mat, nums[0], nums[0])
+        self.decks[name] = (int(deck_type), slab_mat, deck_mat, *nums[:10])
+        return 0
+
+    def GetDeck_1(self, name, *a):
+        d = self.decks.get(name)
+        return [*d, 0, "", "", 0] if d else [0, "", "", *([0.0] * 10), 0, "", "", 1]
+
+    def GetDeck(self, name, *a):
+        k = self.sec.get(name)
+        return [k[1], k[2], k[3], k[4], 0, "", "", 0] if k and k[0] == "deck" else [0, 0, "", 0, 0, "", "", 1]
+
 
 class _PropAreas(_Names):
     """Stateful area sections: {name: (kind, subtype, shell type, material, thickness, bending)}."""
@@ -1173,6 +1259,8 @@ class _PropAreas(_Names):
         super().__init__(names)
         self.sec = {"Slab200": ("slab", 0, 1, "C30", 0.2, 0.2)}
         self.modifiers = {}
+        self.layers = {}
+        self.decks = {}
 
     def _put(self, name, *rec):
         self.sec[name] = rec
@@ -1206,6 +1294,34 @@ class _PropAreas(_Names):
     def SetModifiers(self, name, value):
         self.modifiers[name] = tuple(value)
         return [tuple(value), 0]
+
+    def SetShellLayer_1(self, name, n, *arrays):
+        k = self.sec.get(name)
+        if not k or k[2] != 6 or len(arrays) != 10 or any(len(a) != n for a in arrays):
+            return [*arrays, 1]
+        self.layers[name] = tuple(tuple(a) for a in arrays)
+        return [n, *arrays, 0]
+
+    def GetShellLayer_1(self, name, *a):
+        lay = self.layers.get(name)
+        if not lay:
+            return [0, *(() for _ in range(10)), 1]
+        return [len(lay[0]), *lay, 0]
+
+    def SetDeck_1(self, name, deck_type, slab_mat, deck_mat, *nums):
+        if len(nums) < 10:
+            return 1
+        self._put(name, "deck", int(deck_type), 3, slab_mat, nums[0], nums[0])
+        self.decks[name] = (int(deck_type), slab_mat, deck_mat, *nums[:10])
+        return 0
+
+    def GetDeck_1(self, name, *a):
+        d = self.decks.get(name)
+        return [*d, 0, "", "", 0] if d else [0, "", "", *([0.0] * 10), 0, "", "", 1]
+
+    def GetDeck(self, name, *a):
+        k = self.sec.get(name)
+        return [k[1], k[2], k[3], k[4], 0, "", "", 0] if k and k[0] == "deck" else [0, 0, "", 0, 0, "", "", 1]
 
     def GetModifiers(self, name, *a):
         return [self.modifiers.get(name, (1.0,) * 10), 0]

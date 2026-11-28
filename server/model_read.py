@@ -621,6 +621,18 @@ def read_materials(sap: Any, names: list[str] | None) -> list[dict[str, Any]]:
             g = _try(sap, f"PropMaterial.{meth}", n)
             if g:
                 rec.update(fy=_r(g[0]), fu=_r(g[1]))
+        if kind in ("Concrete", "Steel", "Rebar", "Tendon"):
+            from area_material import read_stress_strain, read_time_dependence   # 0.23.0
+            ss = read_stress_strain(sap, n, kind.lower())
+            if ss:
+                pts = ss.pop("points", None)
+                ss.pop("points_note", None)
+                ss["curve_points"] = len(pts) if pts else 0
+                rec["stress_strain"] = ss
+            if kind == "Concrete":
+                td = read_time_dependence(sap, n)
+                if td and (td["consider_age"] or td["consider_creep"] or td["consider_shrinkage"]):
+                    rec["time_dependence"] = td
         out.append(rec)
     return out
 
@@ -709,6 +721,20 @@ def read_area_sections(sap: Any, sw: str, names: list[str] | None) -> list[dict[
                 rec.update(kind=kind, subtype=int(g[0]), shell_type=int(g[1]), material=str(g[2]),
                            thickness=_r(g[3]))
             break
+        if rec.get("shell_type") == 6 or (rec.get("kind") == "shell" and rec.get("material") in (None, "", "None")):
+            from area_material import read_shell_layers   # 0.23.0: layered shells (type 6)
+            layers = read_shell_layers(sap, n)
+            if layers:
+                rec.update(kind=f"{rec.get('kind', 'shell')} (layered)", layers=layers)
+                rec.pop("thickness", None)
+                rec.pop("bending_thickness", None)
+                if not rec.get("material"):
+                    rec.pop("material", None)
+        elif rec.get("kind") == "deck":
+            from area_material import read_deck
+            deck = read_deck(sap, n)
+            if deck:
+                rec["deck"] = deck
         mod = _try(sap, "PropArea.GetModifiers", n)
         if mod and any(abs(v - 1) > 1e-12 for v in as_list(mod[0])):
             rec["modifiers"] = [_r(v) for v in as_list(mod[0])]
