@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 from actions import (
-    ALLOW_UNLOCK, DRY_RUN, SNAPSHOT, SOFTWARE, UNITS, Params, _dry, _refresh_view, action, bridge,
+    ActionFailed, ALLOW_UNLOCK, DRY_RUN, SNAPSHOT, SOFTWARE, UNITS, Params, _dry, _refresh_view, action, bridge,
 )
 from csi_bridge import LOAD_PATTERN_TYPES, COMError, CSIError, CSIValidationError, Software, UnitPreset, api_call, as_list, \
     describe_units
@@ -499,7 +499,7 @@ CASE_DIRS = ("U1", "U2", "U3", "R1", "R2", "R3")
 class LoadCaseP(_DefP):
     type: Literal["linear_static", "nonlinear_static", "modal_eigen", "modal_ritz", "response_spectrum",
                   "linear_modal_history"] = Field(description=(
-        "linear_static | nonlinear_static | modal_eigen | modal_ritz[[ES: | response_spectrum | "
+        "linear_static | nonlinear_static | modal_eigen | modal_ritz [[ES:| response_spectrum | "
         "linear_modal_history]]"))
     loads: list[CaseLoad] | None = Field(default=None, max_length=200, description=(
         "linear_static: load patterns with factors | modal_ritz: starting vectors, e.g. accelerations UX, UY, UZ"
@@ -758,10 +758,11 @@ def define_load_case(p: LoadCaseP) -> dict[str, Any]:
 # --------------------------------------------------------------------------- functions
 
 class FunctionP(_DefP):
-    kind: Literal["response_spectrum", "time_history"] = Field(description="response_spectrum | time_history")
+    kind: Literal["response_spectrum", "time_history", "steady_state", "power_spectral_density"] = Field(
+        description="response_spectrum | time_history | steady_state | power_spectral_density")
     points: list[list[float]] = Field(min_length=2, max_length=100000, description=(
-        "[[period, value], ...] (response spectrum; value e.g. in g) or [[time, value], ...] (time history), "
-        "increasing period / time; from the user"))
+        "[[period, value], ...] (response spectrum; value e.g. in g), [[time, value], ...] (time history) or "
+        "[[frequency (Hz), value], ...] (steady state / power spectral density), increasing; from the user"))
     damping_ratio: float = Field(default=0.05, ge=0, lt=1, description=(
         "response spectrum: the damping ratio the spectrum is for (default 0.05)"))
 
@@ -786,8 +787,9 @@ def read_function(sap: Any, name: str) -> dict[str, Any] | None:
     return {"name": name, "points": [[round(x, 9), round(y, 9)] for x, y in zip(xs, ys)]}
 
 
-@action("define_function", "Create or replace a user response-spectrum function (period, value; damping ratio) or "
-        "time-history function (time, value) from the user's points. Answers with the function read back from the "
+@action("define_function", "Create or replace a user response-spectrum function (period, value; damping ratio), "
+        "time-history function (time, value), or steady-state / power-spectral-density function (frequency, value) "
+        "from the user's points. Answers with the function read back from the "
         "program.", "Definitions", "edit", FunctionP, programs="ES")
 def define_function(p: FunctionP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
@@ -806,17 +808,25 @@ def define_function(p: FunctionP) -> dict[str, Any]:
     if p.software == "SAP2000":
         if p.kind == "response_spectrum":
             api_call("Func.FuncRS.SetUser", sap.Func.FuncRS.SetUser, p.name, len(xs), xs, ys, p.damping_ratio)
-        else:
+        elif p.kind == "time_history":
             api_call("Func.FuncTH.SetUser", sap.Func.FuncTH.SetUser, p.name, len(xs), xs, ys)
+        elif p.kind == "steady_state":
+            api_call("Func.FuncSS.SetUser", sap.Func.FuncSS.SetUser, p.name, len(xs), xs, ys)
+        else:
+            api_call("Func.FuncPSD.SetUser", sap.Func.FuncPSD.SetUser, p.name, len(xs), xs, ys)
     else:
         from db_edit import edit_table
         if p.kind == "response_spectrum":
             key = "Functions - Response Spectrum - User Defined"
             rows = [{"Name": p.name, "Period": repr(x), "Value": repr(y),
                      "DampRatio": repr(p.damping_ratio) if i == 0 else ""} for i, (x, y) in enumerate(zip(xs, ys))]
-        else:
+        elif p.kind == "time_history":
             key = "Functions - Time History - User Defined"
             rows = [{"Name": p.name, "Time": repr(x), "Value": repr(y)} for x, y in zip(xs, ys)]
+        else:   # measured 28 Nov (ETABS 23.2): fields Name, Frequency, Value
+            key = ("Functions - Steady State - User Defined" if p.kind == "steady_state"
+                   else "Functions - Power Spectral Density - User Defined")
+            rows = [{"Name": p.name, "Frequency": repr(x), "Value": repr(y)} for x, y in zip(xs, ys)]
         extra["table_edit"] = edit_table(sap, key, rows, drop=lambda r: r.get("Name") == p.name)
     back = read_function(sap, p.name)
     if back is None or len(back["points"]) != len(p.points):
@@ -923,6 +933,13 @@ def set_mass_source(p: MassSourceP) -> dict[str, Any]:
         raise CSIValidationError(f"Load patterns not defined: {missing}.", hint=f"Defined: {pats[:30]}")
     names = [m.pattern for m in p.loads or []]
     factors = [m.factor for m in p.loads or []]
+    if p.software == "SAP2000" and p.from_masses and not p.from_elements:
+        # measured 28 Nov 2026 (SAP2000 27.1): SetMassSource with elements off and masses on returns 0 and reads back
+        # masses off too - the program takes element self mass and additional mass as one option
+        raise CSIValidationError("SAP2000 takes element self mass and additional masses together: additional masses "
+                                 "alone are not kept.",
+                                 hint="Give from_elements and from_masses both true; to leave the elements' own mass "
+                                      "out, give their sections a mass modifier of 0 (define_frame_section modifiers).")
     target = p.name
     if p.software == "SAP2000" and not target:
         d = _try(sap, "SourceMass.GetDefault")
@@ -941,4 +958,11 @@ def set_mass_source(p: MassSourceP) -> dict[str, Any]:
     back = read_mass_source(sap, p.software)["mass_sources"]
     if target:
         back = [m for m in back if m.get("name") == target] or back
-    return _finish(p, plan, back[0] if back else None, was_locked, snap)
+    rb = back[0] if back else None
+    out = _finish(p, plan, rb, was_locked, snap)
+    diff = {k: [getattr(p, k), rb.get(k)] for k in ("from_elements", "from_masses", "from_loads")
+            if rb is not None and rb.get(k) != getattr(p, k)}
+    if diff:
+        out.update(not_kept_as_given=diff, message="The program kept a different mass source than given.")
+        raise ActionFailed(out)
+    return out

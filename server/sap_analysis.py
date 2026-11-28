@@ -57,13 +57,17 @@ class StagedP(_EditP):
     geometric_nonlinearity: Literal["none", "p_delta", "p_delta_large_displacements"] = Field(description=(
         "none | p_delta | p_delta_large_displacements"))
     initial_case: str | None = Field(default=None, description="start from the end of this nonlinear case")
+    time_dependent_material: bool = Field(default=False, description=(
+        "include time-dependent material behaviour (creep, shrinkage, aging) of materials made time dependent "
+        "(set_material_time_dependence[[E: - ETABS has no typed setter for that]]); stage durations then matter"))
     replace: bool = Field(default=False, description="change an existing case")
 
 
 @action("define_staged_construction", "Create or change a nonlinear staged-construction load case: stages with "
         "duration and operations (add / remove structure by group with age, load patterns on new or all objects of a "
-        "group, section / modifier / release changes), geometric nonlinearity, initial case. Answers with the stages "
-        "read back.", "Definitions", "edit", StagedP, programs="ES")
+        "group, section / modifier / release changes), geometric nonlinearity, initial case, and time-dependent material "
+        "behaviour (creep / shrinkage). Answers with the stages read back.", "Definitions", "edit", StagedP,
+        programs="ES")
 def define_staged_construction(p: StagedP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
     cases = bridge.try_name_list(sap, ["LoadCases"])[0] or []
@@ -80,7 +84,7 @@ def define_staged_construction(p: StagedP) -> dict[str, Any]:
     if p.initial_case and p.initial_case not in cases:
         raise CSIValidationError(f"Initial case '{p.initial_case}' is not defined.")
     plan = {"case": p.name, "stages": len(p.stages), "geometric_nonlinearity": p.geometric_nonlinearity,
-            "initial_case": p.initial_case}
+            "initial_case": p.initial_case, "time_dependent_material": p.time_dependent_material}
     if p.dry_run:
         return _dry(plan, model_locked=bridge.is_locked(sap))
     snap, was_locked = _start_edit(p, sap, "before_staged_case", "define a staged construction case")
@@ -102,6 +106,10 @@ def define_staged_construction(p: StagedP) -> dict[str, Any]:
              {"none": 0, "p_delta": 1, "p_delta_large_displacements": 2}[p.geometric_nonlinearity])
     if p.initial_case:
         api_call("StaticNonlinearStaged.SetInitialCase", st.SetInitialCase, p.name, p.initial_case)
+    # measured 28 Nov (diag_86): typed in ETABS, SAP2000 and SAFE, read back by GetMaterialNonlinearity
+    api_call("StaticNonlinearStaged.SetMaterialNonlinearity", st.SetMaterialNonlinearity, p.name,
+             p.time_dependent_material)
+    td = _try(sap, "LoadCases.StaticNonlinearStaged.GetMaterialNonlinearity", p.name)
     back: list[dict[str, Any]] = []
     d = _try(sap, "LoadCases.StaticNonlinearStaged.GetStageDefinitions_2", p.name, 0, [], [], [], [])
     durations = as_list(d[1]) if d else []
@@ -121,7 +129,11 @@ def define_staged_construction(p: StagedP) -> dict[str, Any]:
     want = [len(s.operations) for s in p.stages]
     if [len(b["operations"]) for b in back] != want:
         raise CSIValidationError(f"Read back differs: {back}")
-    return {**plan, "read_back": back, "model_was_unlocked": was_locked, **({"snapshot": snap} if snap else {})}
+    td_back = bool(td[0]) if td else None
+    if td_back is not None and td_back != p.time_dependent_material:
+        raise CSIValidationError(f"Time-dependent material read back {td_back}, not {p.time_dependent_material}.")
+    return {**plan, "read_back": back, "time_dependent_material_read_back": td_back, "model_was_unlocked": was_locked,
+            **({"snapshot": snap} if snap else {})}
 
 
 # --------------------------------------------------------------------------- frame hinges

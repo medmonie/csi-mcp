@@ -922,3 +922,7 @@ import rebar  # noqa: E402,F401 - registers set_frame_rebar
 import sections  # noqa: E402,F401 - registers non-prismatic and Section Designer sections
 import excel_export  # noqa: E402,F401 - registers export_tables_to_excel
 import area_material  # noqa: E402,F401 - registers layered shells, decks, stress-strain curves, time dependence
+import loads87  # noqa: E402,F401 - registers support displacements, area wind pressure, SAP2000 strain / gravity loads
+import geometry89  # noqa: E402,F401 - registers divide / join / trim / extend frames, divide / merge areas, points
+import grids810  # noqa: E402,F401 - registers grid systems / coordinate systems and SAP2000 constraints
+import cases86  # noqa: E402,F401 - registers buckling, direct / FNA time history, steady state, PSD, hyperstatic cases

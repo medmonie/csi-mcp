@@ -22,6 +22,8 @@ USAGE = (
     "these cases use the model's modal damping (0.05 by default)."
 )
 ALTERNATIVES = {
+    "hysteretic_mass": "ETABS gives a steady-state case its own constant hysteretic damping (mass 0, stiffness coefficient 0.05, read back) and refuses every import of 'Load Case Definitions - Damping - Hysteretic' (measured); change it in the program's load case form.",
+    "hysteretic_stiffness": "ETABS gives a steady-state case its own constant hysteretic damping (mass 0, stiffness coefficient 0.05, read back) and refuses every import of 'Load Case Definitions - Damping - Hysteretic' (measured); change it in the program's load case form.",
     "radial": "ETABS has no replicate API; replicate_objects copies linearly (mode linear), so place rotated copies "
               "with create_points / create_frames / create_areas." ,
     "mirror": "ETABS has no replicate API; draw the mirrored objects with create_points / create_frames / create_areas.",

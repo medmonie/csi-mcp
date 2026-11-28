@@ -1,4 +1,4 @@
-"""Phase 4: geometry operations - move, replicate, divide frames, merge points, extrude, change connectivity.
+"""Phase 4: geometry operations - move, replicate, merge points, extrude, change connectivity (divide_frames: geometry89).
 
 The CSI edit tools work on the selection, so these actions save the user's selection, select the targets, run the
 tool and restore the selection. Every answer reads the geometry back (point coordinates / new object names).
@@ -316,73 +316,7 @@ def replicate_objects(p: ReplicateP) -> dict[str, Any]:
             **({"snapshot": snap} if snap else {})}
 
 
-# --------------------------------------------------------------------------- divide frames (SAP2000)
-
-class DivideP(_EditP):
-    frames: list[str] | None = Field(default=None, max_length=MAX, description="frame names")
-    group: str | None = Field(default=None, description="or a group: its frames")
-    mode: Literal["ratio", "distance", "intersections"] = Field(description=(
-        "ratio: into `number` pieces, last / first length = `ratio` | distance: in two at `distance` from the I or "
-        "J end | intersections: at points and frames that cross it"))
-    number: int = Field(default=2, ge=2, le=1000, description="ratio: pieces")
-    ratio: float = Field(default=1.0, gt=0, description="ratio: last piece / first piece (1 = equal)")
-    distance: float | None = Field(default=None, gt=0, description="distance: from the end (length units)")
-    from_end: Literal["i", "j"] = Field(default="i", description="distance: measured from the I or J end")
-
-    @model_validator(mode="after")
-    def _mode(self) -> "DivideP":
-        if self.mode == "distance" and self.distance is None:
-            raise ValueError("distance mode needs distance")
-        return self
-
-
-@action("divide_frames", "Divide frame objects (names or a group) into pieces: equal or graded (ratio), at a "
-        "distance from an end, or at intersections. Loads and assignments go to the pieces. Answers with the pieces "
-        "and their end points.", "Geometry", "edit", DivideP, programs="S")
-def divide_frames(p: DivideP) -> dict[str, Any]:
-    sap = bridge.sap_model(p.software)
-    with bridge.units_scope(sap, p.units):
-        frames = _targets(sap, "FrameObj", p.frames, p.group, "frames")
-        lengths = {}
-        for f in frames:
-            g = api_call("FrameObj.GetPoints", sap.FrameObj.GetPoints, f)
-            c = _coords(sap, [str(g[0]), str(g[1])])
-            a, b = c[str(g[0])], c[str(g[1])]
-            lengths[f] = sum((a[i] - b[i]) ** 2 for i in range(3)) ** 0.5
-        if p.mode == "distance":
-            short = [f for f, length in lengths.items() if p.distance >= length]
-            if short:
-                raise CSIValidationError(f"distance {p.distance} is not inside frames {short[:10]} (lengths "
-                                         f"{[round(lengths[f], 4) for f in short[:10]]}).")
-        plan = {"mode": p.mode, "frames": len(frames), "units": describe_units(p.units)}
-        if p.dry_run:
-            return _dry(plan, model_locked=bridge.is_locked(sap))
-        snap, was_locked = _start_edit(p, sap, "before_divide_frames", "divide frames")
-        pieces: dict[str, list[str]] = {}
-        for f in frames:
-            if p.mode == "ratio":
-                o = api_call(f"EditFrame.DivideByRatio('{f}')", sap.EditFrame.DivideByRatio, f, p.number, p.ratio,
-                             [])
-            elif p.mode == "distance":
-                o = api_call(f"EditFrame.DivideAtDistance('{f}')", sap.EditFrame.DivideAtDistance, f, p.distance,
-                             p.from_end == "i", [])
-            else:
-                o = api_call(f"EditFrame.DivideAtIntersections('{f}')", sap.EditFrame.DivideAtIntersections, f, 0,
-                             [])
-            names = [str(x) for x in as_list(o[-1])] if o else []
-            pieces[f] = names
-        detail = {}
-        for f, names in list(pieces.items())[:100]:
-            rows = []
-            for n in names:
-                g = _try(sap, "FrameObj.GetPoints", n)
-                if g:
-                    c = _coords(sap, [str(g[0]), str(g[1])])
-                    rows.append({"frame": n, "i": c.get(str(g[0])), "j": c.get(str(g[1]))})
-            detail[f] = rows
-    _refresh_view(sap)
-    return {**plan, "pieces": detail, "pieces_total": sum(len(v) for v in pieces.values()),
-            "model_was_unlocked": was_locked, **({"snapshot": snap} if snap else {})}
+# divide_frames moved to geometry89.py (0.24.0: ETABS / SAFE added)
 
 
 # --------------------------------------------------------------------------- merge points (SAP2000)

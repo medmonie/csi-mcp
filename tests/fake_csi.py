@@ -133,6 +133,21 @@ class _Points(_Names):
         self.loads[(name, pattern)] = (list(value), self.model.units)
         return [value, 0]
 
+    # 0.24.0 (8.7): ground displacements
+    def SetLoadDispl(self, name, pattern, value, replace=False, csys="Local", item=0):
+        if name not in self.names:
+            return [value, 1]
+        self.displ = getattr(self, "displ", {})
+        self.displ[(name, pattern)] = (tuple(float(v) for v in value), csys)
+        return [value, 0]
+
+    def GetLoadDispl(self, name, *a):
+        items = [(pat, v) for (pt, pat), v in getattr(self, "displ", {}).items() if pt == name]
+        if not items:
+            return [0] + [()] * 10 + [0]
+        return [len(items), tuple(name for _ in items), tuple(p for p, _ in items), tuple(0 for _ in items),
+                tuple(v[1] for _, v in items), *(tuple(v[0][i] for _, v in items) for i in range(6)), 0]
+
     # Phase 3 batch 3 (objects)
     def AddCartesian(self, x, y, z, name="", user="", csys="Global", *a):
         for k, c in XYZ.items():
@@ -374,10 +389,18 @@ class _Frames(_Names):
                 tuple(v[4] for _, v in pl), tuple(v[1] for _, v in pl), tuple(v[2] for _, v in pl),
                 tuple(0.0 for _ in pl), tuple(v[3] for _, v in pl), 0]
 
-    def SetLoadDistributed(self, name, pat, my_type, d, d1, d2, w1, w2, csys, rel, replace, item):
+    def SetLoadDistributed(self, name, pat, my_type, d, d1, d2, w1, w2, csys, rel, replace, item=0):
         if name not in self.names:
             return 1
         self.dist[(name, pat)] = (my_type, d, d1, d2, w1, w2, csys, self.model.units)
+        return 0
+
+    def DeleteLoadDistributed(self, name, pat, *a):
+        self.dist.pop((name, pat), None)
+        return 0
+
+    def DeleteLoadPoint(self, name, pat, *a):
+        getattr(self, "pointloads", {}).pop((name, pat), None)
         return 0
 
 

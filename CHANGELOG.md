@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.24.0 - 2026-11-28
+
+Roadmap 8.6 (load cases), 8.7 (loads), 8.9 (geometry edits) and 8.10 (grid systems, constraints). New modules
+server/cases86.py, loads87.py, geometry89.py, grids810.py; the API was probed in each program first
+(tests/diag_86.py, diag_86b.py). Offline tests 108 -> 116.
+- define_advanced_load_case: buckling, linear and nonlinear direct-integration time history (steps, Rayleigh damping
+  by coefficients / periods / frequencies, Newmark / Wilson / collocation / HHT / Chung-Hulbert integration,
+  geometric nonlinearity, initial case), nonlinear modal (FNA) time history (modal case, constant damping),
+  steady-state and PSD (functions with phase angles, frequency range, added modal / specified frequencies, hysteretic
+  damping) and hyperstatic (base case) load cases. SAP2000: typed calls. ETABS 23.2 has no setters for these
+  (measured: the interfaces carry only GetLoads), so it goes through its 'Load Case Definitions - ...' tables (FNA
+  damping in '... - Damping - Modal'); '... - Damping - Hysteretic' refuses every import, so ETABS steady-state
+  cases keep the program's hysteretic damping (stiffness coefficient 0.05, read back) and hysteretic coefficients are
+  SAP2000 only; its PSD table import turns the case into a steady-state case with the default function, so PSD is
+  SAP2000 only; steady-state results are in the 'Joint Displacements' table (Real / Imag rows), not the results API.
+  SAFE: hyperstatic only. Hyperstatic results: SAP2000 for any linear static base case; ETABS / SAFE run the case
+  but report results only from tendon loads (no HYP rows for a base case without tendons, measured).
+  Read back with the case type code (GetTypeOAPI_1) and the program's getters or table rows.
+- define_function: steady-state and power-spectral-density functions (frequency, value) - SAP2000 FuncSS / FuncPSD,
+  ETABS 'Functions - Steady State / Power Spectral Density - User Defined'.
+- define_staged_construction: time_dependent_material (creep, shrinkage, aging) through
+  StaticNonlinearStaged.SetMaterialNonlinearity, read back (ETABS, SAP2000).
+- assign_support_displacement (all): ground displacements / rotations in a load pattern (PointObj.SetLoadDispl), with
+  the joints where a value meets a free direction listed (no effect there).
+- assign_area_wind_pressure (all): windward / other-face Cp in a wind pattern (refused on other pattern types; the
+  program takes them on any pattern). SAP2000's SetLoadWindPressure_1 distribution codes are not documented and are
+  not used.
+- assign_strain_or_gravity_load (SAP2000): frame strain / curvature components (axial checked: P = E A e), area
+  membrane strains 11 / 22 / 12 (the order of the other area components could not be confirmed, so they are not
+  offered), frame deformations, gravity (self-weight multipliers on chosen objects).
+- set_mass_source: SAP2000 keeps element self mass and additional masses together - additional masses alone read
+  back off (measured), so that combination is refused with the reason and the read-back is compared in all programs
+  (not_kept_as_given).
+- divide_frames now in ETABS and SAFE (built from the typed calls: the frame keeps its first piece, new frames carry
+  the rest with the section, releases split I / J, local axis, modifiers, insertion point, end offsets, material
+  overwrite, groups, line spring, ETABS pier / spandrel, and the distributed / point / temperature loads split by
+  distance). join_frames, trim_or_extend_frame, divide_areas, merge_areas, set_point_coordinates in all three
+  (SAP2000 typed tools; ETABS / SAFE built from ChangeConnectivity, AddByCoord / AddByPoint / Delete, the move tool and
+  the assignment getters and setters - what is copied is listed in each answer); expand_shrink_areas (SAP2000).
+  Measured: ETABS deletes a deleted frame's free end points, judged on the connectivity as of the last view refresh
+  (join reconnects, refreshes, then deletes); SAP2000's area merge keeps a corner that lies on a straight edge.
+- define_grid_system (all): origin, rotation and grid lines (an axis given replaces that axis's lines; SAP2000 also Z
+  lines and rotations about Y / X - its grid systems are coordinate systems), or delete. ETABS / SAFE:
+  GridSys.SetGridSys + 'Grid Definitions - Grid Lines'; SAP2000: CoordSys.SetCoordSys + 'Grid Lines'; read back by
+  GetGridSys_2 / GetCoordSys_2.
+- define_constraint (SAP2000): body, equal, local, weld, line, plate, rod, beam and diaphragm constraints, assigned
+  to / removed from points, deleted; read back from the 'Constraint Definitions - <type>' and 'Joint Constraint
+  Assignments' tables (GetEqual / GetWeld answer 1 through comtypes).
+- define_load_case: the type list reads "modal_ritz | response_spectrum" (a space was missing).
+- tests/live_86.py (run_live_86.bat), against hand values, in SAP2000 27.1, ETABS 23.2 and SAFE 23.3 (E = 2.5e7,
+  nu 0.2, beam 0.3 x 0.5): support settlement 0.01 m on a fixed-fixed 6 m beam - end moment 127.6552 = 6 EI d /
+  (L^2 (1 + phi)) in all three; SAP2000 axial strain 0.001 -> P -3750 = E A e, axial deformation 0.002 -> -1250 =
+  E A d / L, gravity multiplier -> 11.25 = w L^2 / 12; two spans with end couples M0 = 10 - base case 4.9254 and
+  SAP2000 hyperstatic 14.9254 = 1.5 M0 / (1 + 12 EI / (G As (2L)^2)); a fixed-fixed beam with w 10 divided in three by
+  the server (ETABS / SAFE) or the program (SAP2000) - end 30.000 / midspan 15.000; SAP2000 equal constraint on two
+  cantilever tips - both 5.8752e-4 = 5 L^3 / 3EI + 5 L / G As; join / trim / extend / divide / merge / expand / align
+  coordinates and grid systems (origin, rotation, lines, replace, delete) read back; cantilever with a 100 t tip mass,
+  step load 100 kN - linear direct 0.0234974, nonlinear direct 0.0234974, FNA 0.0235007 vs 2 F / k 0.0235008 (SAP2000,
+  ETABS); steady state at half the natural frequency 0.0156672 = F / k / 0.75 (SAP2000) and 0.015633 with ETABS's own hysteretic
+  damping 0.05 (= F / k / sqrt(0.75^2 + 0.05^2), from the Joint Displacements table); buckling of a pinned column
+  in 8 pieces 30842.80 vs pi^2 E I / L^2 30842.51 (SAP2000, ETABS).
+
 ## 0.23.0 - 2026-11-28
 
 Roadmap 8.5: layered shells, deck sections, material stress-strain curves and time-dependent concrete. New module

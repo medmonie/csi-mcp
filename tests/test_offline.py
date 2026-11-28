@@ -1371,11 +1371,9 @@ def test_divide_merge_extrude_connectivity():
     sap = fresh("SAP2000")
     r = call("divide_frames", {"software": "SAP2000", "frames": ["F1"], "mode": "ratio", "number": 3,
                                "snapshot": False, "dry_run": False})
-    assert r["pieces_total"] == 3 and r["pieces"]["F1"][1]["i"] == (2.0, 0.0, 3.0)
+    assert r["pieces_total"] == 3 and r["pieces"]["F1"][1]["i"] == [2.0, 0.0, 3.0]
     bad = call("divide_frames", {"software": "SAP2000", "frames": ["C1"], "mode": "distance", "distance": 5})
     assert bad["_error"] and "not inside" in bad["message"]
-    e = call("divide_frames", {"software": "ETABS", "frames": ["C1"], "mode": "ratio"})
-    assert e["_error"] and "Frame Auto Mesh" in e["hint"]
     sap.PointObj.AddCartesian(0.0, 0.0, 3.001, "", "Q")
     d = call("merge_points", {"software": "SAP2000", "tolerance": 0.01, "dry_run": True})
     assert ["3", "Q"] in d["would"]["close_pairs"]
@@ -2206,3 +2204,133 @@ def test_023_time_dependence_sap_only():
         bad = call("set_material_time_dependence", {**p, "software": sw})
         assert bad["_error"], bad
     assert "set_material_time_dependence" not in catalog.tool_description("ETABS")
+
+
+# --------------------------------------------------------------------------- 0.24.0 (8.6, 8.7, 8.9, 8.10)
+
+def test_024_support_displacement():
+    for sw in ("ETABS", "SAP2000"):
+        sap = fresh(sw)
+        p = {"software": sw, "points": ["1", "3"], "load_pattern": "Dead", "values": [0, 0, -0.01, 0, 0, 0]}
+        d = call("assign_support_displacement", {**p, "dry_run": True})
+        assert d["would"]["no_effect"] == [{"point": "3", "free_directions": ["U3"]}], d
+        r = call("assign_support_displacement", p)
+        assert "_error" not in r and r["read_back"]["1"][0]["values"][2] == -0.01, r
+        assert sap.PointObj.displ[("1", "Dead")][1] == "Global"
+    bad = call("assign_support_displacement", {"software": "SAP2000", "points": ["1"], "load_pattern": "Nope",
+                                               "values": [0, 0, -0.01, 0, 0, 0]})
+    assert bad["_error"] and "not defined" in bad["message"]
+    zero = call("assign_support_displacement", {"software": "SAP2000", "points": ["1"], "load_pattern": "Dead",
+                                                "values": [0] * 6})
+    assert zero["_error"]
+
+
+def test_024_programs_of_new_actions(monkeypatch):
+    texts = []
+    for prog in ("ETABS", "SAP2000", "SAFE"):
+        monkeypatch.setenv("CSI_MCP_PROGRAM", prog)
+        texts.append(catalog.tool_description("all"))
+    e, s, f = texts
+    for name in ("assign_support_displacement", "assign_area_wind_pressure", "join_frames", "trim_or_extend_frame",
+                 "divide_areas", "merge_areas", "set_point_coordinates", "define_grid_system",
+                 "define_advanced_load_case", "divide_frames"):
+        assert all(f"- {name}" in t for t in (e, s, f)), name
+    for name in ("assign_strain_or_gravity_load", "expand_shrink_areas", "define_constraint"):
+        assert f"- {name}" in s and f"- {name}" not in e and f"- {name}" not in f, name
+
+
+def test_024_divide_frame_emulated_etabs_splits_loads():
+    sap = fresh("ETABS")
+    sap.FrameObj.SetLoadDistributed("F1", "Dead", 1, 10, 0.0, 6.0, 10.0, 16.0, "Global", False, True, 0)
+    r = call("divide_frames", {"software": "ETABS", "frames": ["F1"], "mode": "distance", "distance": 2.0})
+    assert "_error" not in r and r["pieces_total"] == 2, r
+    first, second = r["pieces"]["F1"]
+    assert first["frame"] == "F1" and first["j"] == [2.0, 0.0, 3.0] and second["j"] == [6.0, 0.0, 3.0], r
+    fo = sap.FrameObj
+    a = fo.dist[("F1", "Dead")]
+    b = fo.dist[(second["frame"], "Dead")]
+    assert (a[2], a[3], a[4], a[5]) == (0.0, 2.0, 10.0, 12.0), a      # 10 -> 16 over 6 m: 12 at 2 m
+    assert (b[2], b[3], b[4], b[5]) == (0.0, 4.0, 12.0, 16.0), b
+    assert fo.sections[second["frame"]] == "B300x600"
+    # F1's J-end release (M3) moves to the last piece
+    rel = fo.releases
+    assert not any(rel["F1"][1]) and rel[second["frame"]][1][5], rel
+    g = call("divide_frames", {"software": "ETABS", "frames": ["C1"], "mode": "ratio", "number": 3, "ratio": 1.0,
+                               "dry_run": True})
+    assert g["would"]["cut_stations"]["C1"] == [1.0, 2.0], g
+    bad = call("divide_frames", {"software": "ETABS", "frames": ["C1"], "mode": "intersections"})
+    assert bad["_error"]
+
+
+def test_024_join_trim_point_coordinates_etabs():
+    sap = fresh("ETABS")
+    sap.PointObj.AddCartesian(9.0, 0.0, 3.0, "", "Q9")
+    sap.FrameObj.AddByPoint("4", "Q9", "", "B300x600", "F9")
+    j = call("join_frames", {"software": "ETABS", "frame": "F1", "other": "F9"})
+    assert "_error" not in j and "F9" not in sap.FrameObj.names, j
+    assert sorted(map(tuple, j["joined"]["ends"].values())) == [(0.0, 0.0, 3.0), (9.0, 0.0, 3.0)], j
+    nc = call("join_frames", {"software": "ETABS", "frame": "C1", "other": "C2"})
+    assert nc["_error"] and "share" in nc["message"]
+    # trim F1 (0..9 at z 3) back to the line x = 6 of column C2 (6, 0, 0)-(6, 0, 3)
+    t = call("trim_or_extend_frame", {"software": "ETABS", "frame": "F1", "end": "j", "to_frame": "C2",
+                                      "mode": "trim"})
+    assert "_error" not in t and t["ends"]["j"] == [6.0, 0.0, 3.0], t
+    e = call("trim_or_extend_frame", {"software": "ETABS", "frame": "F1", "end": "j", "to_frame": "C2",
+                                      "mode": "extend"})
+    assert e["_error"]
+    m = call("set_point_coordinates", {"software": "ETABS", "mode": "align", "points": ["5", "6"], "axis": "y",
+                                       "ordinate": 4.5})
+    assert "_error" not in m and [x["after"][1] for x in m["points_read_back"]] == [4.5, 4.5], m
+
+
+def test_024_merge_outline():
+    from geometry89 import _drop_collinear, _merge_outline
+    a, b = ["1", "2", "3", "4"], ["2", "5", "6", "3"]
+    out = _merge_outline(a, b)
+    assert out == ["3", "4", "1", "2", "5", "6"], out
+    xyz = {"1": (0, 0, 0), "2": (2, 0, 0), "3": (2, 2, 0), "4": (0, 2, 0), "5": (4, 0, 0), "6": (4, 2, 0)}
+    assert sorted(_drop_collinear(out, xyz)) == ["1", "4", "5", "6"]
+    assert _merge_outline(["1", "2", "3"], ["4", "5", "6"]) is None
+
+
+def test_024_advanced_case_validation():
+    fresh("SAP2000")
+    base = {"software": "SAP2000", "name": "TH1", "type": "linear_direct_history",
+            "loads": [{"name": "Dead", "function": "Nope"}], "steps": 100, "step_size": 0.01}
+    bad = call("define_advanced_load_case", base)
+    assert bad["_error"] and "Functions not defined" in bad["message"]
+    no = call("define_advanced_load_case", {**base, "steps": None})
+    assert no["_error"]
+    fna = call("define_advanced_load_case", {**base, "type": "nonlinear_modal_history",
+                                             "damping": {"method": "mass_stiffness"}})
+    assert fna["_error"]
+    fresh("SAFE")
+    s = call("define_advanced_load_case", {"software": "SAFE", "name": "B1", "type": "buckling",
+                                           "loads": [{"name": "Dead"}]})
+    assert s["_error"]
+    h = call("define_advanced_load_case", {"software": "SAFE", "name": "H1", "type": "hyperstatic",
+                                           "base_case": "Dead", "dry_run": True})
+    assert "_error" not in h and h["would"]["base_case"] == "Dead", h
+
+
+def test_024_grid_and_constraint_validation():
+    fresh("ETABS")
+    d = call("define_grid_system", {"software": "ETABS", "name": "G2", "origin": [10, 5], "rotation": 30,
+                                    "x_lines": [{"id": "A", "ordinate": 0}, {"id": "B", "ordinate": 8}],
+                                    "dry_run": True})
+    assert "_error" not in d and d["would"]["origin"] == [10, 5], d
+    z = call("define_grid_system", {"software": "ETABS", "name": "G2", "z_lines": [{"id": "Z", "ordinate": 0}]})
+    assert z["_error"]
+    dup = call("define_grid_system", {"software": "ETABS", "name": "G2",
+                                      "x_lines": [{"id": "A", "ordinate": 0}, {"id": "A", "ordinate": 1}]})
+    assert dup["_error"]
+    fresh("SAP2000")
+    c = call("define_constraint", {"software": "SAP2000", "operation": "define", "name": "B1", "type": "equal"})
+    assert c["_error"] and "dofs" in str(c)
+    c2 = call("define_constraint", {"software": "SAP2000", "operation": "define", "name": "L1", "type": "local",
+                                    "dofs": ["UX"]})
+    assert c2["_error"]
+
+
+def test_024_staged_time_dependent_flag():
+    assert "time_dependent_material" in ACTIONS["define_staged_construction"].params.model_fields
