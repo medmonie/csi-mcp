@@ -2095,3 +2095,178 @@ class FakeApi:
 
     def ApplicationExit(self, save):
         return 0
+
+
+# --------------------------------------------------------------------------- 0.25.0 (roadmap 8.11)
+
+def _brace_set(self, name, typ, loc, d1, d2, rel=True, *a):
+    if name not in self.names or not rel:
+        return 1
+    self.__dict__.setdefault("bracing", {}).setdefault(name, []).append((int(typ), int(loc), d1, d2))
+    return 0
+
+
+def _brace_get(self, name, *a):
+    b = self.__dict__.get("bracing", {}).get(name, [])
+    L = 6.0
+    return [len(b), tuple(name for _ in b), tuple(x[0] for x in b), tuple(x[1] for x in b),
+            tuple(float(x[2]) for x in b), tuple(float(x[3]) if x[0] == 2 else 0.0 for x in b),
+            tuple(float(x[2]) * L for x in b), tuple(float(x[3]) * L if x[0] == 2 else 0.0 for x in b), 0]
+
+
+def _brace_delete(self, name, typ=3, *a):
+    if getattr(self, "delete_bracing_ignored", False):
+        return 0                     # ETABS / SAFE: returns 0, deletes nothing (measured)
+    b = self.__dict__.get("bracing", {}).get(name, [])
+    self.__dict__.setdefault("bracing", {})[name] = [x for x in b if typ != 3 and x[0] != typ]
+    return 0
+
+
+def _tc_set(self, name, c_on, c, t_on, t, *a):
+    self.__dict__.setdefault("tc", {})[name] = (bool(c_on), -abs(c), bool(t_on), t)
+    return 0
+
+
+def _tc_get(self, name, *a):
+    return [*self.__dict__.get("tc", {}).get(name, (False, 0.0, False, 0.0)), 0]
+
+
+def _proc_set(self, name, code, *a):
+    codes = getattr(self, "proc_codes", {1: None, 2: -9})
+    if int(code) not in codes:
+        return 1
+    self.__dict__.setdefault("proc", {})[name] = codes[int(code)]
+    return 0
+
+
+def _proc_get(self, name, *a):
+    v = self.__dict__.get("proc", {}).get(name)
+    return [v if v is not None else 1, 0]
+
+
+_Frames.SetLateralBracing = _brace_set
+_Frames.GetLateralBracing = _brace_get
+_Frames.DeleteLateralBracing = _brace_delete
+_Frames.SetTCLimits = _tc_set
+_Frames.GetTCLimits = _tc_get
+_Frames.SetDesignProcedure = _proc_set
+_Frames.GetDesignProcedure = _proc_get
+
+
+def _pz_set(self, name, prop, t, k1, k2, link, conn, axis, ang, *a):
+    if int(prop) not in (1, 2, 3) or int(conn) not in (0, 1) or int(axis) not in (0, 1):
+        return 1
+    self.__dict__.setdefault("pz", {})[name] = (int(prop), t, k1, k2, link or "", int(conn), int(axis), ang)
+    return 0
+
+
+def _pz_get(self, name, *a):
+    v = self.__dict__.get("pz", {}).get(name)
+    return [*v, 0] if v else [0, 0.0, 0.0, 0.0, "", 0, 0, 0.0, 1]
+
+
+def _pz_delete(self, name, *a):
+    self.__dict__.get("pz", {}).pop(name, None)
+    return 0
+
+
+def _axes_set(self, name, a, b, c, *x):
+    self.__dict__.setdefault("axes", {})[name] = (a, b, c)
+    return 0
+
+
+def _axes_get(self, name, *x):
+    return [*self.__dict__.get("axes", {}).get(name, (0.0, 0.0, 0.0)), False, 0]
+
+
+_Points.SetPanelZone = _pz_set
+_Points.GetPanelZone = _pz_get
+_Points.DeletePanelZone = _pz_delete
+_Points.SetLocalAxes = _axes_set
+_Points.GetLocalAxes = _axes_get
+
+
+def _edge_set(self, name, on, *a):
+    self.__dict__.setdefault("edge", {})[name] = bool(on)
+    return 0
+
+
+def _edge_get(self, name, *a):
+    return [self.__dict__.get("edge", {}).get(name, False), 0]
+
+
+_Areas.SetEdgeConstraint = _edge_set
+_Areas.GetEdgeConstraint = _edge_get
+
+
+def _link_delete(self, name, *a):
+    if name not in self.names:
+        return 1
+    self.names.remove(name)
+    self.data.pop(name, None)
+    return 0
+
+
+def _link_selected(self, name, sel, *a):
+    return self.model.SelectObj.mark(7, name, sel) if getattr(self, "model", None) else 0
+
+
+_LinkObj.Delete = _link_delete
+_LinkObj.SetSelected = _link_selected
+
+
+def _sel_prop_frame(self, name, deselect=False):
+    for n in self.model.FrameObj.names:
+        if self.model.FrameObj.sections.get(n) == name:
+            self.mark(2, n, not deselect)
+    return 0
+
+
+def _sel_invert(self):
+    m = self.model
+    every = [(1, n) for n in m.PointObj.names] + [(2, n) for n in m.FrameObj.names] + \
+        [(5, n) for n in m.AreaObj.names]
+    self.sel = [x for x in every if x not in self.sel]
+    return 0
+
+
+def _sel_range(self, x0, x1, y0, y1, z0, z1, deselect=False, *a):
+    def inside(p):
+        x, y, z = XYZ[p]
+        return x0 <= x <= x1 and y0 <= y <= y1 and z0 <= z <= z1
+    m = self.model
+    for n in m.PointObj.names:
+        if n in XYZ and inside(n):
+            self.mark(1, n, not deselect)
+    for n in m.FrameObj.names:
+        if n in FRAMES and all(inside(p) for p in FRAMES[n]):
+            self.mark(2, n, not deselect)
+    for n in m.AreaObj.names:
+        if all(inside(p) for p in _Areas.PTS.get(n, ())):
+            self.mark(5, n, not deselect)
+    return 0
+
+
+def _sel_plane(axis):
+    def f(self, point, deselect=False):
+        lv = XYZ[point][axis]
+        m = self.model
+        for n in m.PointObj.names:
+            if n in XYZ and abs(XYZ[n][axis] - lv) < 1e-9:
+                self.mark(1, n, not deselect)
+        for n in m.FrameObj.names:
+            if n in FRAMES and all(abs(XYZ[p][axis] - lv) < 1e-9 for p in FRAMES[n]):
+                self.mark(2, n, not deselect)
+        for n in m.AreaObj.names:
+            if all(abs(XYZ[p][axis] - lv) < 1e-9 for p in _Areas.PTS.get(n, ())):
+                self.mark(5, n, not deselect)
+        return 0
+    return f
+
+
+_Select.PropertyFrame = _sel_prop_frame
+_Select.InvertSelection = _sel_invert
+_Select.CoordinateRange = _sel_range
+_Select.PlaneXY = _sel_plane(2)
+_Select.PlaneXZ = _sel_plane(1)
+_Select.PlaneYZ = _sel_plane(0)

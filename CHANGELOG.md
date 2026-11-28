@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.25.0 - 2026-11-28
+
+Roadmap 8.11: assignments and selection. New module server/assign811.py; select_objects and delete_objects extended
+(objects.py); modelling._targets reads groups for links, cables, tendons and solids. The API was probed in each
+program first (tests/diag_811.py, diag_811b.py, diag_811c.py). Offline tests 116 -> 120.
+- assign_lateral_bracing (ETABS, SAP2000, SAFE): point or uniform bracing of the top, bottom or both flanges at
+  relative or absolute distances (always sent relative: ETABS / SAFE read absolute distances in the model's database
+  units, e.g. mm, whatever the present units - measured); replace / delete in SAP2000 (DeleteLateralBracing) and
+  ETABS (its DeleteLateralBracing returns 0 and deletes nothing, so the frames' rows are dropped from the 'Steel Frame
+  Lateral Bracing - Point / Uniform' tables); SAFE adds only (no working delete, no such tables). Read back relative
+  and absolute (relative x length).
+- assign_frame_tc_limits (all three): compression / tension force limits (the programs store compression negative;
+  given and reported as positive magnitudes), for nonlinear cases.
+- assign_design_procedure: from_material / no_design (all), composite_beam (ETABS, SAFE). Measured codes: SAP2000 1 /
+  2 (read 1 steel, 2 concrete, -9 no design); ETABS / SAFE 0 / 3 / 7.
+- assign_panel_zone (all three): elastic from the column with a doubler plate, rotational springs, or a link property
+  (ETABS, SAP2000); user local-axis angle; connectivity beams / braces (SAP2000 - ETABS / SAFE ignore it); delete.
+  Measured: the connectivity and local-axis codes are zero-based (SAP2000 connectivity 0 beams / 1 braces; axis 0
+  column / 1 user), not 1 / 2 as documented.
+- assign_point_local_axes (SAP2000): angles a, b, c (ETABS / SAFE have no setter).
+- assign_area_edge_constraint (all three): on / off (new ETABS / SAFE areas start on, SAP2000 areas off).
+- select_objects: new modes property (frame / area section, material; link property ETABS / SAP2000; cable / tendon
+  / solid property SAP2000), coordinate_range (box; include_intersections SAP2000), plane (XY / XZ / YZ through a
+  point) and invert; the answer now lists the selected names. SAP2000 uses its SelectObj calls; ETABS / SAFE have
+  none of them (measured), so the objects are picked from their own data (sections, materials, coordinates) and
+  selected one by one - the answer says so.
+- delete_objects: links (ETABS, SAP2000), cables / tendons / solids (SAP2000).
+- tests/live_811.py (run_live_811.bat), against hand values:
+  - tension-only braces (three pin-ended bars, H = 100 kN): linear AN / BN = +62.5 / -62.5 kN, CN = 0; nonlinear
+    with compression limit 0: AN = 124.9998, BN = -0.0002, CN = -74.9998 (hand 125 / 0 / -75), the same numbers in
+    SAP2000 and ETABS;
+  - SAP2000 base rotated a = 90 deg: reaction in the point's local axes F1 = 0, F2 = 10.0000 kN (unrotated F1 = -10);
+  - bracing (incl. absolute 1.5 m -> 0.25), replace / delete (SAP2000, ETABS), T/C limits, design procedure, panel
+    zones, edge constraints and link deletion read back; selection by section, material, box, plane and invert gave
+    the expected objects in all three.
+- Found, not changed: ETABS 23.2 refuses a one-joint (grounded) link through LinkObj.AddByPoint (return code 1), so
+  create_links in ETABS works for two-joint links only (to look into).
+
 ## 0.24.0 - 2026-11-28
 
 Roadmap 8.6 (load cases), 8.7 (loads), 8.9 (geometry edits) and 8.10 (grid systems, constraints). New modules

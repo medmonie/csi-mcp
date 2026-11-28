@@ -16,7 +16,7 @@ program**, each with one tool named after it: **`etabs(action, params)`, `sap200
 | ETABS | 23.2.0 | OK | OK |
 | SAFE | 23.3.2 | OK | OK |
 
-Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.24.0
+Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.25.0
 (roadmap Phases 0-2 with V1 verification: 238 / 238 values match CSI's published results: foundation, full model read, results depth; report stages R1-R3; Phase 3 first batch:
 area mesh, joint patterns, area loads; 0.7.0: one server per program; 0.8.0: definitions - materials, sections,
 springs, patterns, cases, combinations, mass source; 0.9.0: objects - points, frames, areas, their assignments,
@@ -34,7 +34,9 @@ remaining audit items: busy watchdog, export overwrite scope, design-settings pa
 time-dependent concrete; 0.24.0 roadmap 8.6, 8.7, 8.9, 8.10: buckling, direct-integration and FNA time-history,
 steady-state, PSD and hyperstatic cases, staged time dependence; support displacements, area wind pressure
 coefficients, SAP2000 strain / deformation / gravity loads; divide / join / trim / extend frames, divide / merge areas,
-point coordinates in all three programs; grid systems and SAP2000 constraints).
+point coordinates in all three programs; grid systems and SAP2000 constraints; 0.25.0 roadmap 8.11:
+lateral bracing, tension / compression limits, design procedure, panel zones, SAP2000 point local axes, area edge
+constraints; selection by property / coordinate box / plane / invert; deletion of links, cables, tendons, solids).
 
 ## Install
 
@@ -213,6 +215,7 @@ program is waiting to be closed.
 | `tests\run_live_sections.bat [SAP2000] [ETABS] [SAFE] [--hidden]` | 0.22.0: non-prismatic tapered cantilever deflection (SAP2000, ETABS) = hand integral; Section Designer tee / I / polygon properties by hand and an SD column check (SAP2000; ETABS through its tables); ETABS staged construction M = w L^2 / 16 | `tests\results\live_sections.txt` |
 | `tests\run_live_props85.bat [SAP2000] [ETABS] [SAFE]` | 0.23.0: layered-shell cantilever strip (uniform and two-material layers) tip deflection = PL^3 / 3EI of the transformed section in all three; filled deck self weight = hand (ETABS, SAFE); simple concrete / steel stress-strain curves = the parabola / hardening formulas; user curve and SAP2000 CEB-FIP 90 time dependence read back. |
 | `tests\run_live_86.bat [SAP2000] [ETABS] [SAFE]` | 0.24.0: support settlement end moment = 6EId / (L^2 (1 + phi)); SAP2000 axial strain / deformation / gravity = EAe, EAd/L, wL^2/12; two-span hyperstatic moment = 1.5 M0; a loaded beam divided by the server (ETABS / SAFE) keeps wL^2/12 and wL^2/24; equal-constraint cantilever tips; join / trim / extend / divide / merge / align geometry; grid systems read back; step-load time history (linear, nonlinear direct, FNA) max = 2F/k; steady state F/k/(1 - r^2); buckling = pi^2 EI / L^2. |
+| `tests\run_live_811.bat [SAP2000] [ETABS] [SAFE]` | 0.25.0: tension-only braces - linear AN / BN = +-62.5 kN, nonlinear with compression limit 0 AN = 125, BN = 0, CN = -75 (SAP2000, ETABS); SAP2000 rotated point axes: reaction F1 = 0, F2 = 10 kN; bracing / limits / design procedure / panel zones / edge constraints / link delete read back; selection by section, material, box, plane, invert. |
 | `tests\run_verify_v4.bat [--hidden]` | V4: copies of CSI's ETABS design examples (ACI 318-19 Ex001 / Ex002, AISC 360-16 Ex001 / Ex002) designed through the actions with the code and combinations they hold, compared with CSI's published values; design report per example | `tests\results\verify_v4.txt`, `tests\results\verify\v4\` |
 | `tests\run_verify_v1.bat [..] [--hidden] [--only "Example 1-001"]` | V1: 38 of CSI's own verification models (copies) analysed and read through the MCP, 238 values compared with CSI's published program values (needs the "CSI Solved Examples" folder; expected values in `tests\verify\expected_v1.py`, local only) | `tests\results\verify_v1.txt`, `tests\results\verify\v1_results.csv` |
 | `tests\run_verify_v2.bat [SAP2000] [ETABS] [SAFE] [--hidden]`, `run_verify_v2_safe.bat` | V2: copies of SAP2000 1-001, ETABS Ex 01 and SAFE S03a read with `export_model_snapshot`, rebuilt in a blank model with the edit actions only, analysed and graded against CSI's published values; every raw API difference original -> rebuilt listed | `tests\results\verify_v2.txt`, `tests\results\verify\v2\` |

@@ -2334,3 +2334,148 @@ def test_024_grid_and_constraint_validation():
 
 def test_024_staged_time_dependent_flag():
     assert "time_dependent_material" in ACTIONS["define_staged_construction"].params.model_fields
+
+
+# --------------------------------------------------------------------------- 0.25.0 (roadmap 8.11)
+
+def test_025_lateral_bracing():
+    for sw in ("SAP2000", "ETABS", "SAFE"):
+        sap = fresh(sw)
+        br = [{"kind": "point", "location": "top", "start": 0.5}, {"kind": "uniform", "location": "bottom",
+                                                                  "start": 0.0, "end": 1.0}]
+        dry = call("assign_lateral_bracing", {"software": sw, "frame_names": ["F1"], "bracing": br, "dry_run": True})
+        assert dry["dry_run"] and not sap.FrameObj.__dict__.get("bracing"), dry
+        r = call("assign_lateral_bracing", {"software": sw, "frame_names": ["F1"], "bracing": br})
+        assert "_error" not in r and "not_kept_as_given" not in r, r
+        got = r["read_back"]["F1"]
+        assert got[0] == {"kind": "point", "location": "top", "start": 0.5, "start_abs": 3.0}, got
+        assert got[1]["end_abs"] == 6.0
+        # absolute distances are sent as relative (ETABS / SAFE read absolute ones in database units)
+        r = call("assign_lateral_bracing", {"software": sw, "frame_names": ["F1"], "relative": False,
+                                            "bracing": [{"kind": "point", "location": "all", "start": 1.5}]})
+        assert sap.FrameObj.bracing["F1"][-1][2] == 0.25 and "not_kept_as_given" not in r, r
+        bad = call("assign_lateral_bracing", {"software": sw, "frame_names": ["F1"], "relative": False,
+                                              "bracing": [{"kind": "point", "location": "all", "start": 7.0}]})
+        assert bad["_error"] and "beyond" in bad["message"]
+    sap = fresh("SAP2000")
+    call("assign_lateral_bracing", {"software": "SAP2000", "frame_names": ["F1"],
+                                    "bracing": [{"kind": "point", "location": "top", "start": 0.5}]})
+    r = call("assign_lateral_bracing", {"software": "SAP2000", "frame_names": ["F1"], "operation": "replace",
+                                        "bracing": [{"kind": "point", "location": "bottom", "start": 0.25}]})
+    assert len(r["read_back"]["F1"]) == 1 and "not_kept_as_given" not in r, r
+    r = call("assign_lateral_bracing", {"software": "SAP2000", "frame_names": ["F1"], "operation": "delete"})
+    assert r["read_back"]["F1"] == [] and "not_kept_as_given" not in r, r
+    fresh("SAFE")
+    bad = call("assign_lateral_bracing", {"software": "SAFE", "frame_names": ["F1"], "operation": "delete"})
+    assert bad["_error"], bad
+    bad = call("assign_lateral_bracing", {"software": "SAP2000", "frame_names": ["F1"],
+                                          "bracing": [{"kind": "uniform", "location": "top", "start": 0.5}]})
+    assert bad["_error"] and "end" in str(bad)
+
+
+def test_025_tc_limits_and_design_procedure():
+    for sw in ("SAP2000", "ETABS", "SAFE"):
+        sap = fresh(sw)
+        r = call("assign_frame_tc_limits", {"software": sw, "frame_names": ["C1", "C2"], "compression_limit": 0})
+        assert "_error" not in r and r["read_back"]["C1"] == {"compression_limit": 0.0, "tension_limit": None}, r
+        assert sap.FrameObj.tc["C1"][1] == 0.0 and sap.FrameObj.tc["C1"][0] is True
+        r = call("assign_frame_tc_limits", {"software": sw, "frame_names": ["C1"], "compression_limit": 5,
+                                            "tension_limit": 100})
+        assert sap.FrameObj.tc["C1"][1] == -5 and r["read_back"]["C1"]["compression_limit"] == 5.0, r
+        r = call("assign_frame_tc_limits", {"software": sw, "frame_names": ["C1"]})
+        assert r["read_back"]["C1"] == {"compression_limit": None, "tension_limit": None} and "note" in r
+    sap = fresh("SAP2000")
+    r = call("assign_design_procedure", {"software": "SAP2000", "frame_names": ["F1"], "procedure": "no_design"})
+    assert "_error" not in r and r["read_back"]["F1"] == "no_design" and "not_kept_as_given" not in r, r
+    r = call("assign_design_procedure", {"software": "SAP2000", "frame_names": ["F1"], "procedure": "from_material"})
+    assert r["read_back"]["F1"] == "steel_frame", r
+    bad = call("assign_design_procedure", {"software": "SAP2000", "frame_names": ["F1"],
+                                           "procedure": "composite_beam"})
+    assert bad["_error"], bad
+    sap = fresh("ETABS")
+    sap.FrameObj.proc_codes = {0: None, 3: 3, 7: 7}
+    r = call("assign_design_procedure", {"software": "ETABS", "frame_names": ["F1"], "procedure": "composite_beam"})
+    assert r["read_back"]["F1"] == "composite_beam" and "not_kept_as_given" not in r, r
+    r = call("assign_design_procedure", {"software": "ETABS", "frame_names": ["F1"], "procedure": "no_design"})
+    assert r["read_back"]["F1"] == "no_design", r
+
+
+def test_025_panel_zone_axes_edge():
+    sap = fresh("SAP2000")
+    r = call("assign_panel_zone", {"software": "SAP2000", "point_names": ["3", "4"], "property": "column",
+                                   "doubler_thickness": 0.012})
+    assert "_error" not in r and "not_kept_as_given" not in r, r
+    assert r["read_back"]["3"] == {"property": "column", "doubler_thickness": 0.012, "local_axis": "from_column",
+                                   "connectivity": "beams_to_other"}, r
+    assert sap.PointObj.pz["3"][5] == 0 and sap.PointObj.pz["3"][6] == 0      # zero-based codes (measured)
+    r = call("assign_panel_zone", {"software": "SAP2000", "point_names": ["3"], "property": "springs",
+                                   "k_major": 1e6, "k_minor": 2e6, "connectivity": "braces_to_other",
+                                   "local_axis_angle": 30})
+    assert r["read_back"]["3"]["local_axis_angle"] == 30.0 and sap.PointObj.pz["3"][5] == 1, r
+    r = call("assign_panel_zone", {"software": "SAP2000", "point_names": ["3"], "operation": "delete"})
+    assert r["read_back"]["3"] is None and "not_kept_as_given" not in r, r
+    bad = call("assign_panel_zone", {"software": "SAP2000", "point_names": ["3"], "property": "springs",
+                                     "k_major": 1e6})
+    assert bad["_error"] and "k_minor" in str(bad)
+    bad = call("assign_panel_zone", {"software": "SAP2000", "point_names": ["3"], "property": "link",
+                                     "link_property": "NOPE"})
+    assert bad["_error"] and "NOPE" in bad["message"]
+    fresh("ETABS")
+    r = call("assign_panel_zone", {"software": "ETABS", "point_names": ["3"], "property": "column"})
+    assert "connectivity" not in r["read_back"]["3"] and "not_kept_as_given" not in r, r
+    bad = call("assign_panel_zone", {"software": "ETABS", "point_names": ["3"], "property": "column",
+                                     "connectivity": "braces_to_other"})
+    assert bad["_error"], bad
+    fresh("SAFE")
+    bad = call("assign_panel_zone", {"software": "SAFE", "point_names": ["3"], "property": "link",
+                                     "link_property": "X"})
+    assert bad["_error"], bad
+    sap = fresh("SAP2000")
+    r = call("assign_point_local_axes", {"software": "SAP2000", "point_names": ["1"], "angles": [90, 0, 0]})
+    assert r["read_back"]["1"]["angles"] == [90.0, 0.0, 0.0] and "not_kept_as_given" not in r, r
+    fresh("ETABS")
+    bad = call("assign_point_local_axes", {"software": "ETABS", "point_names": ["1"], "angles": [90, 0, 0]})
+    assert bad["_error"], bad
+    for sw in ("SAP2000", "ETABS", "SAFE"):
+        sap = fresh(sw)
+        r = call("assign_area_edge_constraint", {"software": sw, "area_names": ["A1"], "constrained": True})
+        assert r["read_back"] == {"A1": True} and sap.AreaObj.edge["A1"] is True, r
+
+
+def test_025_selection_and_delete():
+    for sw in ("SAP2000", "ETABS", "SAFE"):
+        sap = fresh(sw)
+        r = call("select_objects", {"software": sw, "mode": "property", "property_kind": "frame_section",
+                                    "property": "C500x500"})
+        assert "_error" not in r and sorted(r["names"]["frame"]) == ["C1", "C2"], r
+        assert ("emulated" in r["how"]) == (sw != "SAP2000"), r
+        r = call("select_objects", {"software": sw, "mode": "coordinate_range", "box": [-1, 7, -1, 1, 2, 4]})
+        assert r["names"]["frame"] == ["F1"] and sorted(r["names"]["point"]) == ["3", "4"], r
+        r = call("select_objects", {"software": sw, "mode": "plane", "plane": "xy", "plane_point": "3"})
+        assert r["names"]["frame"] == ["F1"] and r["names"]["area"] == ["A1"], r
+        assert sorted(r["names"]["point"]) == ["3", "4", "5", "6"], r
+        r = call("select_objects", {"software": sw, "mode": "invert"})
+        assert sorted(r["names"]["frame"]) == ["C1", "C2"] and "area" not in r["names"], r
+        bad = call("select_objects", {"software": sw, "mode": "property", "property_kind": "frame_section",
+                                      "property": "NOPE"})
+        assert bad["_error"]
+        bad = call("select_objects", {"software": sw, "mode": "coordinate_range", "box": [1, 0, 0, 1, 0, 1]})
+        assert bad["_error"] and "minimum" in str(bad)
+    fresh("ETABS")
+    bad = call("select_objects", {"software": "ETABS", "mode": "coordinate_range", "box": [0, 1, 0, 1, 0, 1],
+                                  "include_intersections": True})
+    assert bad["_error"], bad
+    bad = call("select_objects", {"software": "ETABS", "mode": "property", "property_kind": "cable_property",
+                                  "property": "X"})
+    assert bad["_error"], bad
+    for sw in ("SAP2000", "ETABS"):
+        sap = fresh(sw)
+        sap.LinkObj.AddByPoint("1", "", "", True, "LK", "L1")
+        r = call("delete_objects", {"software": sw, "kind": "links", "names": ["L1"]})
+        assert "_error" not in r and r["deleted"] == 1 and sap.LinkObj.names == [], r
+    fresh("SAFE")
+    bad = call("delete_objects", {"software": "SAFE", "kind": "links", "names": ["L1"]})
+    assert bad["_error"], bad
+    fresh("ETABS")
+    bad = call("delete_objects", {"software": "ETABS", "kind": "cables", "names": ["C1"]})
+    assert bad["_error"], bad

@@ -39,7 +39,8 @@ def _targets(sap: Any, collection: str, names: list[str] | None, group: str | No
         if real is None:
             raise CSIValidationError(f"Group '{group}' is not defined.", hint=f"Groups: {groups[:30]}")
         o = api_call("GroupDef.GetAssignments", sap.GroupDef.GetAssignments, real)
-        type_code = {"PointObj": 1, "FrameObj": 2, "AreaObj": 5}[collection]
+        type_code = {"PointObj": 1, "FrameObj": 2, "CableObj": 3, "TendonObj": 4, "AreaObj": 5, "SolidObj": 6,
+                     "LinkObj": 7}[collection]
         picked = [str(n) for t, n in zip(o[1] or (), o[2] or ()) if int(t) == type_code]
         if not picked:
             raise CSIValidationError(f"Group '{real}' has no {kind}.")

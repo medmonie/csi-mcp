@@ -926,3 +926,4 @@ import loads87  # noqa: E402,F401 - registers support displacements, area wind p
 import geometry89  # noqa: E402,F401 - registers divide / join / trim / extend frames, divide / merge areas, points
 import grids810  # noqa: E402,F401 - registers grid systems / coordinate systems and SAP2000 constraints
 import cases86  # noqa: E402,F401 - registers buckling, direct / FNA time history, steady state, PSD, hyperstatic cases
+import assign811  # noqa: E402,F401 - registers lateral bracing, T/C limits, design procedure, panel zones, point axes, edge constraints

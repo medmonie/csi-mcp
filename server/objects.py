@@ -698,27 +698,153 @@ def set_group(p: GroupP) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- selection
 
+SELECT_PROPERTY = {"frame_section": ("PropertyFrame", "FrameObj"), "area_section": ("PropertyArea", "AreaObj"),
+                   "link_property": ("PropertyLink", "LinkObj"), "cable_property": ("PropertyCable", "CableObj"),
+                   "tendon_property": ("PropertyTendon", "TendonObj"), "solid_property": ("PropertySolid", "SolidObj"),
+                   "material": ("PropertyMaterial", None)}
+PROPERTY_COLLECTION = {"frame_section": "PropFrame", "area_section": "PropArea", "link_property": "PropLink",
+                       "cable_property": "PropCable", "tendon_property": "PropTendon",
+                       "solid_property": "PropSolid", "material": "PropMaterial"}
+PLANE_TOL = 1e-4
+
+
 class SelectP(Params):
     software: Software = SOFTWARE
-    mode: Literal["clear", "names", "group", "all"] = Field(description=(
-        "clear | names (points / frames / areas below) | group | all"))
+    units: UnitPreset = UNITS
+    mode: Literal["clear", "names", "group", "all", "property", "coordinate_range", "plane", "invert"] = Field(
+        description=("clear | names (points / frames / areas below) | group | all | property (objects using a "
+                     "section, property or material) | coordinate_range (objects inside a box) | plane (objects in "
+                     "the XY / XZ / YZ plane through a point) | invert (select what is not selected)"))
     points: list[str] = Field(default=[], max_length=MAX, description="names mode: point names")
     frames: list[str] = Field(default=[], max_length=MAX, description="names mode: frame names")
     areas: list[str] = Field(default=[], max_length=MAX, description="names mode: area names")
     group: str | None = Field(default=None, description="group mode: the group")
+    property_kind: Literal["frame_section", "area_section", "link_property", "cable_property", "tendon_property",
+                           "solid_property", "material"] | None = Field(default=None, description=(
+        "property mode: frame_section | area_section[[ES: | link_property]][[S: | cable_property | tendon_property | "
+        "solid_property]] | material"))
+    property: str | None = Field(default=None, description="property mode: the section / property / material name")
+    box: list[float] | None = Field(default=None, min_length=6, max_length=6, description=(
+        "coordinate_range mode: [x_min, x_max, y_min, y_max, z_min, z_max] in global coordinates (length of `units`)"
+        "; objects fully inside are selected"))
+    include_intersections: bool = Field(default=False, description=(
+        "coordinate_range: also objects that only cross the box"))
+    plane: Literal["xy", "xz", "yz"] | None = Field(default=None, description="plane mode: xy | xz | yz")
+    plane_point: str | None = Field(default=None, description="plane mode: a point the plane passes through")
     deselect: bool = Field(default=False, description="true: remove these from the selection instead")
-    keep_existing: bool = Field(default=False, description="names / group / all: add to the current selection")
+    keep_existing: bool = Field(default=False, description=(
+        "names / group / all / property / coordinate_range / plane: add to the current selection"))
+
+    @model_validator(mode="after")
+    def _check(self) -> "SelectP":
+        need = {"property": ("property_kind", "property"), "coordinate_range": ("box",),
+                "plane": ("plane", "plane_point")}.get(self.mode, ())
+        missing = [f for f in need if getattr(self, f) in (None, "")]
+        if missing:
+            raise ValueError(f"{self.mode} mode needs {', '.join(missing)}")
+        if self.box and any(self.box[i] > self.box[i + 1] for i in (0, 2, 4)):
+            raise ValueError("box: each minimum must not exceed its maximum")
+        return self
 
 
-@action("select_objects", "Select objects in the program (by names, a group, or all), or clear the selection - e.g. "
-        "to show the user which objects an answer is about. The model is not changed. Answers with what is "
-        "selected.", "Objects", "edit", SelectP)
+def _xyz(sap: Any, point: str) -> tuple[float, float, float]:
+    c = api_call("PointObj.GetCoordCartesian", sap.PointObj.GetCoordCartesian, point)
+    return float(c[0]), float(c[1]), float(c[2])
+
+
+def _object_points(sap: Any) -> dict[str, dict[str, list[str]]]:
+    """Points of every point / frame / area / link object (emulated selection in ETABS / SAFE)."""
+    out: dict[str, dict[str, list[str]]] = {"points": {}, "frames": {}, "areas": {}, "links": {}}
+    for n in _names(sap, "PointObj"):
+        out["points"][n] = [n]
+    for n in _names(sap, "FrameObj"):
+        out["frames"][n] = [str(x) for x in api_call("FrameObj.GetPoints", sap.FrameObj.GetPoints, n)[:2]]
+    for n in _names(sap, "AreaObj"):
+        g = api_call("AreaObj.GetPoints", sap.AreaObj.GetPoints, n)
+        out["areas"][n] = [str(x) for x in as_list(g[1])]
+    if hasattr(sap, "LinkObj"):
+        for n in bridge.try_name_list(sap, ["LinkObj"])[0] or []:
+            out["links"][n] = [str(x) for x in api_call("LinkObj.GetPoints", sap.LinkObj.GetPoints, n)[:2]]
+    return out
+
+
+def _emulated_pick(sap: Any, p: SelectP) -> dict[str, list[str]]:
+    """ETABS / SAFE have no SelectObj.Property* / CoordinateRange / Plane* calls (measured 0.25.0): pick the objects
+    from their own data, then select them one by one."""
+    picked: dict[str, list[str]] = {"points": [], "frames": [], "areas": [], "links": []}
+    if p.mode == "property":
+        if p.property_kind == "frame_section":
+            picked["frames"] = [n for n in _names(sap, "FrameObj")
+                                if str(api_call("FrameObj.GetSection", sap.FrameObj.GetSection, n)[0]) == p.property]
+        elif p.property_kind == "area_section":
+            picked["areas"] = [n for n in _names(sap, "AreaObj")
+                               if str(api_call("AreaObj.GetProperty", sap.AreaObj.GetProperty, n)[0]) == p.property]
+        elif p.property_kind == "link_property":
+            picked["links"] = [n for n in bridge.try_name_list(sap, ["LinkObj"])[0] or []
+                               if str(api_call("LinkObj.GetProperty", sap.LinkObj.GetProperty, n)[0]) == p.property]
+        else:   # material: frames whose section (or material overwrite) uses it, areas whose property uses it
+            sec_mat: dict[str, str] = {}
+            for n in _names(sap, "FrameObj"):
+                sec = str(api_call("FrameObj.GetSection", sap.FrameObj.GetSection, n)[0])
+                if sec not in sec_mat:
+                    g = _try(sap, "PropFrame.GetMaterial", sec)
+                    sec_mat[sec] = str(g[0]) if g else ""
+                ow = _try(sap, "FrameObj.GetMaterialOverwrite", n)
+                mat = str(ow[0]) if ow and ow[0] not in (None, "", "None") else sec_mat[sec]
+                if mat == p.property:
+                    picked["frames"].append(n)
+            from model_read import read_area_sections
+            amat = {r["name"]: str(r.get("material") or "") for r in read_area_sections(sap, p.software, None)}
+            picked["areas"] = [n for n in _names(sap, "AreaObj")
+                               if amat.get(str(api_call("AreaObj.GetProperty", sap.AreaObj.GetProperty, n)[0])) ==
+                               p.property]
+        return picked
+    objs = _object_points(sap)
+    coords: dict[str, tuple[float, float, float]] = {}
+
+    def xyz(pt: str) -> tuple[float, float, float]:
+        if pt not in coords:
+            coords[pt] = _xyz(sap, pt)
+        return coords[pt]
+
+    if p.mode == "coordinate_range":
+        b = p.box or []
+        tol = PLANE_TOL
+
+        def inside(pt: str) -> bool:
+            x, y, z = xyz(pt)
+            return (b[0] - tol <= x <= b[1] + tol and b[2] - tol <= y <= b[3] + tol and b[4] - tol <= z <= b[5] + tol)
+
+        for kind, items in objs.items():
+            picked[kind] = [n for n, pts in items.items() if pts and all(inside(q) for q in pts)]
+        return picked
+    axis = {"xy": 2, "xz": 1, "yz": 0}[p.plane or "xy"]
+    level = xyz(p.plane_point or "")[axis]
+    for kind, items in objs.items():
+        picked[kind] = [n for n, pts in items.items()
+                        if pts and all(abs(xyz(q)[axis] - level) <= PLANE_TOL * max(1.0, abs(level)) for q in pts)]
+    return picked
+
+
+@action("select_objects", "Select objects in the program - by names, a group, all, the section / property / "
+        "material they use, a coordinate box or a plane through a point, or invert the selection - or clear it; e.g. "
+        "to show the user which objects an answer is about. The model is not changed. Answers with what is selected "
+        "(counts and names).", "Objects", "edit", SelectP,
+        options={"property_kind": {"link_property": "ES", "cable_property": "S", "tendon_property": "S",
+                                   "solid_property": "S"}},
+        fields={"include_intersections": "S"})
 def select_objects(p: SelectP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
     if p.mode == "group":
         groups = bridge.try_name_list(sap, ["GroupDef"])[0] or []
         if p.group not in groups:
             raise CSIValidationError(f"Group '{p.group}' is not defined.", hint=f"Defined: {groups[:30]}")
+    if p.mode == "property":
+        defined = bridge.try_name_list(sap, [PROPERTY_COLLECTION[p.property_kind or "material"]])[0] or []
+        if p.property not in defined:
+            raise CSIValidationError(f"'{p.property}' is not a defined {p.property_kind}.", hint=f"Defined: {defined[:30]}")
+    if p.mode == "plane" and p.plane_point not in set(_names(sap, "PointObj")):
+        raise CSIValidationError(f"Point '{p.plane_point}' is not in the model.")
     lists = (("PointObj", p.points), ("FrameObj", p.frames), ("AreaObj", p.areas))
     if p.mode == "names":
         if not (p.points or p.frames or p.areas):
@@ -728,40 +854,78 @@ def select_objects(p: SelectP) -> dict[str, Any]:
                 missing = sorted(set(names) - set(_names(sap, coll)))
                 if missing:
                     raise CSIValidationError(f"Not in the model ({coll[:-3].lower()}s): {missing[:20]}.")
-    if p.mode == "clear" or (not p.keep_existing and not p.deselect):
+    if p.mode == "clear" or (p.mode != "invert" and not p.keep_existing and not p.deselect):
         api_call("SelectObj.ClearSelection", sap.SelectObj.ClearSelection)
-    if p.mode == "all":
-        api_call("SelectObj.All", sap.SelectObj.All, p.deselect)
-    elif p.mode == "group":
-        api_call("SelectObj.Group", sap.SelectObj.Group, p.group, p.deselect)
-    elif p.mode == "names":
-        for coll, names in lists:
-            obj = getattr(sap, coll)
-            for n in names:
-                api_call(f"{coll}.SetSelected", obj.SetSelected, n, not p.deselect)
+    how = "program"
+    with bridge.units_scope(sap, p.units):
+        if p.mode == "all":
+            api_call("SelectObj.All", sap.SelectObj.All, p.deselect)
+        elif p.mode == "group":
+            api_call("SelectObj.Group", sap.SelectObj.Group, p.group, p.deselect)
+        elif p.mode == "invert":
+            api_call("SelectObj.InvertSelection", sap.SelectObj.InvertSelection)
+        elif p.mode == "names":
+            for coll, names in lists:
+                obj = getattr(sap, coll)
+                for n in names:
+                    api_call(f"{coll}.SetSelected", obj.SetSelected, n, not p.deselect)
+        elif p.mode in ("property", "coordinate_range", "plane"):
+            so = sap.SelectObj
+            if p.software == "SAP2000":
+                if p.mode == "property":
+                    call = SELECT_PROPERTY[p.property_kind or "material"][0]
+                    api_call(f"SelectObj.{call}", getattr(so, call), p.property, p.deselect)
+                elif p.mode == "coordinate_range":
+                    b = p.box or []
+                    api_call("SelectObj.CoordinateRange", so.CoordinateRange, b[0], b[1], b[2], b[3], b[4], b[5],
+                             p.deselect, "Global", p.include_intersections)
+                else:
+                    call = {"xy": "PlaneXY", "xz": "PlaneXZ", "yz": "PlaneYZ"}[p.plane or "xy"]
+                    api_call(f"SelectObj.{call}", getattr(so, call), p.plane_point, p.deselect)
+            else:
+                how = "emulated (the program has no such selection call): objects picked from their own data"
+                picked = _emulated_pick(sap, p)
+                for kind, coll in (("points", "PointObj"), ("frames", "FrameObj"), ("areas", "AreaObj"),
+                                   ("links", "LinkObj")):
+                    for n in picked[kind]:
+                        api_call(f"{coll}.SetSelected", getattr(sap, coll).SetSelected, n, not p.deselect)
     _refresh_view(sap)
     g = _try(sap, "SelectObj.GetSelected")
     counts: dict[str, int] = {}
-    for t in as_list(g[1]) if g else []:
+    names: dict[str, list[str]] = {}
+    for t, n in zip(as_list(g[1]), as_list(g[2])) if g else []:
         k = OBJ_TYPES.get(int(t), str(t))
         counts[k] = counts.get(k, 0) + 1
-    return {"mode": p.mode, "selected": counts, "selected_total": sum(counts.values())}
+        if len(names.setdefault(k, [])) < 300:
+            names[k].append(str(n))
+    out = {"mode": p.mode, "selected": counts, "selected_total": sum(counts.values()), "names": names}
+    if p.mode in ("property", "coordinate_range", "plane"):
+        out["how"] = how
+    if p.mode == "coordinate_range":
+        out["units"] = describe_units(p.units)
+    return out
 
 
 # --------------------------------------------------------------------------- delete
 
+DELETE_COLL = {"points": "PointObj", "frames": "FrameObj", "areas": "AreaObj", "links": "LinkObj",
+               "cables": "CableObj", "tendons": "TendonObj", "solids": "SolidObj"}
+
+
 class DeleteP(_EditP):
-    kind: Literal["points", "frames", "areas"] = Field(description="points | frames | areas")
+    kind: Literal["points", "frames", "areas", "links", "cables", "tendons", "solids"] = Field(description=(
+        "points | frames | areas[[ES: | links]][[S: | cables | tendons | solids]]"))
     names: list[str] | None = Field(default=None, max_length=MAX, description="objects to delete")
     group: str | None = GROUP
 
 
-@action("delete_objects", "Delete frames or areas (names or a group); points are deleted only when nothing is "
-        "connected to them (the others are kept and listed). Loads and assignments on deleted objects go with them. "
-        "Confirm with the user first.", "Objects", "edit", DeleteP)
+@action("delete_objects", "Delete frames, areas[[ES: , links]][[S: , cables, tendons or solids]] (names or a "
+        "group); points are deleted only when nothing is connected to them (the others are kept and listed). Loads "
+        "and assignments on deleted objects go with them. Confirm with the user first.", "Objects", "edit", DeleteP,
+        options={"kind": {"links": "ES", "cables": "S", "tendons": "S", "solids": "S"}})
 def delete_objects(p: DeleteP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
-    coll = {"points": "PointObj", "frames": "FrameObj", "areas": "AreaObj"}[p.kind]
+    coll = DELETE_COLL[p.kind]
     objs = _targets(sap, coll, p.names, p.group, p.kind)
     plan = {"kind": p.kind, "objects": len(objs), "names": objs[:50]}
     if p.dry_run:
