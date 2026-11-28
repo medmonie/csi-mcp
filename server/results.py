@@ -12,7 +12,6 @@ eigenvalues), warnings, cases solved, modes found, equations, start / complete t
 from __future__ import annotations
 
 import logging
-import contextlib
 import datetime as dt
 import re
 from pathlib import Path

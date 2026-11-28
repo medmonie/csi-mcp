@@ -82,19 +82,7 @@ def _apply(sap: Any) -> dict[str, Any]:
 
 def write_table(sap: Any, key: str, version: int, fields: list[str], rows: list[dict[str, str]]) -> dict[str, Any]:
     """Set the whole table (rows in field order) and apply it; cancels the pending edit when the set is refused."""
-    flat = [str(r.get(f, "")) for r in rows for f in fields]
-    try:
-        api_call(f"DatabaseTables.SetTableForEditingArray('{key}')", sap.DatabaseTables.SetTableForEditingArray,
-                 key, version, fields, len(rows), flat)
-        return _apply(sap)
-    except Exception as failure:
-        try:
-            api_call("CancelTableEditing", sap.DatabaseTables.CancelTableEditing)
-        except Exception as cleanup:
-            raise CSIApiError("CancelTableEditing", detail=f"import failed ({failure}) and the pending edit could not "
-                              f"be cancelled ({cleanup})",
-                              hint="Inspect the CSI import session before making another edit.") from failure
-        raise
+    return write_tables(sap, [(key, version, fields, rows)])
 
 
 def write_tables(sap: Any, items: list[tuple[str, int, list[str], list[dict[str, str]]]]) -> dict[str, Any]:

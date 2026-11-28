@@ -923,22 +923,13 @@ def model_snapshot(sap: Any, sw: str, include_assignments: bool) -> dict[str, An
 def export_model_snapshot(p: SnapshotJsonP) -> dict[str, Any]:
     sap = bridge.sap_model(p.software)
     model = bridge.model_filename(sap, p.software)
-    if p.output_path:
-        path = Path(p.output_path).expanduser().resolve()
-        if path.suffix.lower() != ".json":
-            raise CSIValidationError("output_path must end in .json")
-        if not path.parent.is_dir():
-            raise CSIValidationError(f"Folder does not exist: {path.parent}")
-    else:
-        folder = safety.output_root() / "exports"
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"{safety.safe_stem(Path(model).stem if model else p.software)}_model_{safety.stamp()}.json"
+    path = safety.output_target(p.output_path, ".json", p.overwrite, "exports",
+                                f"{Path(model).stem if model else p.software}_model", model or None,
+                                CSIValidationError)
     with bridge.units_scope(sap, p.units):
         snap = model_snapshot(sap, p.software, p.include_assignments)
     doc = {"software": p.software, "model_file": model or None, "units": describe_units(p.units),
            "created": dt.datetime.now().isoformat(timespec="seconds"), **snap}
-    if path.exists() and not p.overwrite:
-        raise CSIValidationError("Snapshot already exists. Choose a new path or set overwrite to true.")
     with safety.staged_file(path, p.overwrite) as tmp:
         tmp.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
     counts = {k: len(v) for k, v in snap.items() if isinstance(v, list)}

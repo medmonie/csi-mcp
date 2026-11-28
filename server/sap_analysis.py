@@ -205,18 +205,19 @@ def assign_frame_hinges(p: HingeP) -> dict[str, Any]:
                                                          ("Frame", "RelDist", "AbsDist", "ActualDist", "ActualRDist")]}
     if p.dry_run:
         return _dry(plan, model_locked=bridge.is_locked(sap))
-    snap, was_locked = _start_edit(p, sap, "before_hinges", "assign frame hinges")
-    names = set(p.frame_names)
-    res = edit_table(sap, p.table, rows, drop=(lambda r: r.get("Frame") in names) if p.replace else None)
-    _refresh_view(sap)
-    back = {}
-    for f in p.frame_names[:50]:
-        g = _try(sap, "FrameObj.GetHingeAssigns_1", f, 0, [], [], [], [], [], [], [], [])
-        if g:
-            # the program places a point hinge at the middle of its hinge length: a hinge at relative distance 0
-            # sits half a hinge length in (measured: 0.15 m for a 0.3 m deep section, hinge length 1 x depth)
-            back[f] = [{"hinge": str(as_list(g[2])[k]), "relative_distance": round(float(as_list(g[7])[k]), 6),
-                        "actual_distance": round(float(as_list(g[8])[k]), 6)} for k in range(int(g[0]))]
+    with bridge.units_scope(sap, p.units):   # table values and actual_distance in the units asked for (audit L7)
+        snap, was_locked = _start_edit(p, sap, "before_hinges", "assign frame hinges")
+        names = set(p.frame_names)
+        res = edit_table(sap, p.table, rows, drop=(lambda r: r.get("Frame") in names) if p.replace else None)
+        _refresh_view(sap)
+        back = {}
+        for f in p.frame_names[:50]:
+            g = _try(sap, "FrameObj.GetHingeAssigns_1", f, 0, [], [], [], [], [], [], [], [])
+            if g:
+                # the program places a point hinge at the middle of its hinge length: a hinge at relative distance 0
+                # sits half a hinge length in (measured: 0.15 m for a 0.3 m deep section, hinge length 1 x depth)
+                back[f] = [{"hinge": str(as_list(g[2])[k]), "relative_distance": round(float(as_list(g[7])[k]), 6),
+                            "actual_distance": round(float(as_list(g[8])[k]), 6)} for k in range(int(g[0]))]
     short = [f for f in p.frame_names[:50] if len(back.get(f, [])) < len(p.relative_distances)]
     out = {**plan, "table_edit": res, "read_back": back, "model_was_unlocked": was_locked,
            **({"snapshot": snap} if snap else {})}
@@ -233,7 +234,7 @@ LANE_KEY, STD_VEH_KEY, CLASS_KEY = "Lane Definition Data", "Vehicles 1 - Standar
 class LaneP(_EditP):
     name: str = Field(min_length=1, description="lane name")
     frames: list[str] = Field(min_length=1, max_length=500, description="the frames the lane follows, in order")
-    width: float = Field(ge=0, description="lane width (present units)")
+    width: float = Field(ge=0, description="lane width (length units of `units`)")
     offset: float = Field(default=0.0, description="offset of the lane centre line from the frames")
     values: dict[str, str | float | int] = Field(default_factory=dict, description=(
         "other fields of 'Lane Definition Data' with the designer's values (discretization, edge types ...)"))

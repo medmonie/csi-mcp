@@ -24,7 +24,6 @@ from csi_bridge import (
     COM_AVAILABLE,
     LOAD_CASE_TYPES,
     LOAD_PATTERN_TYPES,
-    SOFTWARE_NAMES,
     SPECS,
     CSIApiError,
     CSIBridge,
@@ -479,11 +478,11 @@ def create_frame_element(p: FrameP) -> dict[str, Any]:
     if math.dist(p.start_xyz, p.end_xyz) <= 1e-9:
         raise CSIValidationError("start_xyz and end_xyz are the same point; a frame needs a length.")
     sap = bridge.sap_model(p.software)
-    sections = bridge.name_list(sap, "PropFrame")
-    if p.section_name not in sections:
+    frame_secs = bridge.name_list(sap, "PropFrame")
+    if p.section_name not in frame_secs:
         raise CSIValidationError(
             f"Frame section '{p.section_name}' is not defined.",
-            hint=f"Closest sections: {suggest_keys(p.section_name, sections) or sections[:20]}. See list_definitions.")
+            hint=f"Closest sections: {suggest_keys(p.section_name, frame_secs) or frame_secs[:20]}. See list_definitions.")
     if p.dry_run:
         locked = bridge.is_locked(sap)
         return _dry({"create_frame": {"start_xyz": p.start_xyz, "end_xyz": p.end_xyz, "section": p.section_name,

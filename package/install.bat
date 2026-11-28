@@ -31,7 +31,9 @@ if not defined CLAUDE_OPEN tasklist /fi "imagename eq claude.exe" | find /i "cla
 )
 echo Installing the %NAME% server for %USERDOMAIN%\%USERNAME%  (%USERPROFILE%)
 echo ACCOUNT %USERDOMAIN%\%USERNAME%  SERVER %NAME% >> "%LOG%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -LiteralPath '%~dp0' -Recurse -File | Unblock-File" >> "%LOG%" 2>&1
+rem The folder goes to PowerShell through an environment variable, so a name with an apostrophe cannot break the command.
+set "CSIMCP_PKG=%~dp0"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -LiteralPath $env:CSIMCP_PKG -Recurse -File | Unblock-File" >> "%LOG%" 2>&1
 
 set "SRV=%LOCALAPPDATA%\CsiMcp\%NAME%"
 if not exist "%SRV%" mkdir "%SRV%"
@@ -49,12 +51,11 @@ if exist "%LOCALAPPDATA%\CsiMcp\csi-mcp-server.exe" del /q "%LOCALAPPDATA%\CsiMc
 
 echo.
 echo Connecting MCP clients:
-set "CLIENTS=%TEMP%\csimcp_clients_%RANDOM%.txt"
+set "CLIENTS=%SRV%\configure_clients_result.txt"
 "%EXE%" --configure-clients "%EXE%" > "%CLIENTS%" 2>&1
 set "CRC=%ERRORLEVEL%"
 type "%CLIENTS%"
 type "%CLIENTS%" >> "%LOG%"
-del /q "%CLIENTS%" 2>nul
 echo CLIENTS exit %CRC% >> "%LOG%"
 if not "%CRC%"=="0" echo Some client settings could not be changed. Add the %NAME% entry by hand: %SRV%\claude_desktop_config_snippet.json
 echo RESULT=OK >> "%LOG%"

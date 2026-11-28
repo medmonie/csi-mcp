@@ -27,11 +27,11 @@ from actions import (
     bridge, get_analysis_summary, list_definitions,
 )
 import diagrams as dg
-from csi_bridge import CSIError, Software, UnitPreset, api_call, as_list, describe_units, user_path
+from csi_bridge import CSIError, Software, UnitPreset, api_call, as_list, describe_units
 from model_read import report_geometry
 import results as rs
 from table_tools import (
-    TableError, filter_by_cases, find_column, id_columns, resolve_exact_key, rows_to_dataframe, suggest_keys,
+    TableError, filter_by_cases, id_columns, resolve_exact_key, rows_to_dataframe, suggest_keys,
 )
 
 SECTIONS = ("cover", "model", "diagrams", "definitions", "tables", "results", "result_diagrams", "design")
@@ -799,27 +799,10 @@ def _where(g: dict[str, Any]) -> str:
 
 
 def _target(p: ReportP) -> Path:
-    if p.output_path:
-        path = Path(user_path(p.output_path)).resolve()
-        if path.suffix.lower() != "." + p.format:
-            raise TableError(f"output_path must end in .{p.format} (format {p.format})")
-        if not path.parent.is_dir():
-            raise TableError(f"Folder does not exist: {path.parent}")
-    else:
-        st = _status_core(p.software, counts=False)
-        stem = Path(st.get("model_file") or f"{p.software}_model").stem
-        folder = safety.output_root() / "reports"
-        folder.mkdir(parents=True, exist_ok=True)
-        base = f"{safety.safe_stem(stem)}_{safety.stamp()}"
-        path = folder / f"{base}.{p.format}"
-        n = 2
-        while path.exists():          # default names never collide (two reports in the same second)
-            path = folder / f"{base}_{n}.{p.format}"
-            n += 1
-        return path
-    if path.exists() and not p.overwrite:
-        raise TableError(f"{path} exists.", hint="Give another output_path, or overwrite: true.")
-    return path
+    st = _status_core(p.software, counts=False)
+    model = st.get("model_file")
+    return safety.output_target(p.output_path, "." + p.format, p.overwrite, "reports",
+                                Path(model or f"{p.software}_model").stem, model, TableError)
 
 
 @action("export_report", "Report of the model and its results built from the program's data, as PDF, Word (.docx) or "

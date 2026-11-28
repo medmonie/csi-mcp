@@ -34,6 +34,7 @@ if __name__ == "__main__" and not {"--configure-clients", "--remove-clients", "-
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
 
 import anyio
+import pydantic_core
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import CallToolRequest, CallToolResult, ListToolsRequest, PingRequest, TextContent, ToolAnnotations
 from pydantic import ValidationError
@@ -83,6 +84,33 @@ def may_cancel(request_id: Any) -> bool:
         ABANDONED[:] = [call]
         log.warning("Cancellation of '%s' ignored: the CSI call is already running and cannot be stopped.", call.action)
     return False
+
+
+def _limit(action: str) -> float:
+    """Seconds a CSI call may run before new calls are answered Busy (audit M3): CSI_MCP_BUSY_AFTER (default 120) for
+    ordinary actions, CSI_MCP_BUSY_AFTER_LONG (default 1800) for long-running ones (analysis, design, reports)."""
+    a = ACTIONS.get(action)
+    long = bool(getattr(a, "long_running", False))
+    name, default = ("CSI_MCP_BUSY_AFTER_LONG", 1800.0) if long else ("CSI_MCP_BUSY_AFTER", 120.0)
+    try:
+        return max(5.0, float(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+def _stuck_call() -> CallToolResult | None:
+    """Busy when the call CSI is working on has run past its limit: a dialog in the program usually holds the COM
+    thread, and a new call would otherwise wait behind it with no answer (audit M3)."""
+    now = time.time()
+    for call in list(CALLS.values()):
+        if call.future.running() and now - call.started > _limit(call.action):
+            seconds = round(now - call.started)
+            return _error({"error_type": "Busy", "message": (
+                f"The program has been working on '{call.action}' for {seconds} s, longer than expected. "
+                "This call did not start."),
+                "hint": "If the program shows a dialog or message box, close it; the waiting call then finishes. "
+                        "Otherwise wait and try again."})
+    return None
 
 
 def _earlier_call() -> tuple[CallToolResult | None, dict[str, Any] | None]:
@@ -214,8 +242,11 @@ async def run_action(ctx: Context | None, action: str, params: dict[str, Any] | 
         while True:
             await anyio.sleep(HEARTBEAT_SECONDS)
             beats += 1
+            late = beats * HEARTBEAT_SECONDS > _limit(action.strip())
+            text = (f"Waiting for {waiting_for} - longer than expected; if the program shows a dialog, close it"
+                    if late else f"Waiting for {waiting_for}")
             try:
-                await context.report_progress(beats, None, f"Waiting for {waiting_for}")
+                await context.report_progress(beats, None, text)
             except Exception:  # noqa: BLE001 - progress is best effort
                 return
 
@@ -225,6 +256,10 @@ async def run_action(ctx: Context | None, action: str, params: dict[str, Any] | 
     busy, earlier = (None, None) if is_help else _earlier_call()
     if busy is not None:
         return busy
+    if not is_help:
+        stuck = _stuck_call()
+        if stuck is not None:
+            return stuck
 
     result: Any = None
     error: BaseException | None = None
@@ -286,6 +321,14 @@ EDIT_TOOL = ToolAnnotations(title="CSI", readOnlyHint=False, destructiveHint=Tru
                             openWorldHint=False)
 
 
+def compact(result: Any) -> Any:
+    """A result as single-line JSON text (audit L9): the SDK indents it by 2, about 30 % more characters (and tokens)
+    for the same content. Same conversion as the SDK otherwise (other objects as str), but NaN / inf as null (valid JSON)."""
+    if isinstance(result, (dict, list)):
+        return pydantic_core.to_json(result, fallback=str, inf_nan_mode="null").decode()
+    return result
+
+
 def create_server(chatgpt: bool = False) -> FastMCP:
     mcp = CsiServer(edition.server_name())
     mcp._mcp_server.version = catalog.SERVER_VERSION
@@ -300,18 +343,18 @@ def create_server(chatgpt: bool = False) -> FastMCP:
                   f"Read {label} models and analysis results. Call help to list actions and parameter schemas. "
                   f"Table reads can change {label} display settings. Export actions write files.", annotations=read_ann)
         async def tool_read(action: str, ctx: Context, params: dict[str, Any] | None = None) -> Any:
-            return await run_action(ctx, action, params, allow_read=True, allow_edit=False)
+            return compact(await run_action(ctx, action, params, allow_read=True, allow_edit=False))
 
         @mcp.tool(name=edit_name, description=catalog.tool_description("edit") if not chatgpt else
                   f"Edit the active {label} model, files or application. Use {read_name} help for action parameters. "
                   "Confirm edits, file operations and unlocking with the user. Unlocking deletes solver results.",
                   annotations=edit_ann)
         async def tool_edit(action: str, ctx: Context, params: dict[str, Any] | None = None) -> Any:
-            return await run_action(ctx, action, params, allow_read=False, allow_edit=True)
+            return compact(await run_action(ctx, action, params, allow_read=False, allow_edit=True))
     else:
         @mcp.tool(name=edition.server_name(), description=catalog.tool_description("all"), annotations=edit_ann)
         async def tool_all(action: str, ctx: Context, params: dict[str, Any] | None = None) -> Any:
-            return await run_action(ctx, action, params, allow_read=True, allow_edit=True)
+            return compact(await run_action(ctx, action, params, allow_read=True, allow_edit=True))
     return mcp
 
 

@@ -11,7 +11,7 @@ set "SRV=%LOCALAPPDATA%\CsiMcp\%NAME%"
 set "TOOL=%SRV%\%EXE_NAME%"
 if not exist "%TOOL%" set "TOOL=%~dp0%EXE_NAME%"
 "%TOOL%" --remove-clients
-del /q "%SRV%\%EXE_NAME%" "%SRV%\claude_desktop_config_snippet.json" 2>nul
+del /q "%SRV%\%EXE_NAME%" "%SRV%\claude_desktop_config_snippet.json" "%SRV%\configure_clients_result.txt" 2>nul
 rmdir "%SRV%" 2>nul
 echo.
 echo Uninstalled the %NAME% server. Restart Claude Desktop.

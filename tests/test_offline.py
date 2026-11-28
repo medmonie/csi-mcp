@@ -1980,3 +1980,110 @@ def test_0222_render_spacing_and_help_defaults(monkeypatch):
         assert "Answers with" not in catalog.render(ACTIONS["create_frames"].summary).split("Answers with", 1)[1]
     monkeypatch.setenv("CSI_MCP_PROGRAM", "SAP2000")
     assert catalog.param_help(ACTIONS["define_lane"])["values"]["default"] == {}
+
+
+def test_0223_watchdog_answers_busy_behind_a_stuck_call(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from actions import Action, NoParams
+    started, release = threading.Event(), threading.Event()
+
+    def stuck(_):                 # a CSI call held by a dialog in the program
+        started.set()
+        release.wait(10)
+        return {"done": True}
+
+    ACTIONS["_stuck"] = Action("_stuck", "", "Session", "edit", NoParams, stuck)
+    ACTIONS["_quick2"] = Action("_quick2", "", "Session", "read", NoParams, lambda _: {"quick": True})
+    ctx = lambda rid: SimpleNamespace(request_context=SimpleNamespace(request_id=rid, meta=None))  # noqa: E731
+    assert server._limit("run_analysis") == 1800 and server._limit("get_model_status") == 120
+    monkeypatch.setenv("CSI_MCP_BUSY_AFTER", "300")
+    assert server._limit("get_model_status") == 300
+
+    async def scenario():
+        first = asyncio.ensure_future(server.run_action(ctx(11), "_stuck", {}, True, True))
+        await asyncio.to_thread(started.wait, 10)
+        monkeypatch.setattr(server, "_limit", lambda action: 0.0)       # past its limit at once
+        busy = await server.run_action(ctx(12), "_quick2", {}, True, True)
+        assert busy.isError and busy.structuredContent["error_type"] == "Busy"
+        assert "dialog" in busy.structuredContent["hint"]
+        assert (await server.run_action(ctx(13), "help", {}, True, True))   # help is never refused
+        release.set()
+        assert await first == {"done": True}
+        assert (await server.run_action(ctx(14), "_quick2", {}, True, True)) == {"quick": True}
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        ACTIONS.pop("_stuck"), ACTIONS.pop("_quick2")
+
+
+def test_0223_design_settings_partial_failure_lists_what_was_applied(monkeypatch):
+    import design
+    from csi_bridge import CSIApiError
+    sap = fresh("ETABS")
+    combo = sap.RespCombo.names[0]
+
+    def refused(*a, **k):
+        raise CSIApiError("ApplyEditedTables", ret=1, hint="refused by the program")
+    monkeypatch.setattr(design, "write_table", refused)
+    r = call("set_design_settings", {"software": "ETABS", "kind": "steel_frame", "preferences": {"SRatioLimit": 0.9},
+                                     "strength_combinations": {combo: True}})
+    assert r["_error"] and "part-way" in r["message"], r
+    assert r["applied_before_failure"] == [f"SetComboStrength {combo} True"], r
+    assert combo in r["settings_now"]["combinations"]["strength"]
+    # a failure before anything is written stays a plain error
+    bad = call("set_design_settings", {"software": "ETABS", "kind": "steel_frame", "preferences": {"Nope": 1}})
+    assert bad["_error"] and "applied_before_failure" not in bad
+    # allow_unlock is no longer a parameter here (it was never used)
+    bad = call("set_design_settings", {"software": "ETABS", "kind": "steel_frame", "allow_unlock": True,
+                                       "strength_combinations": {combo: True}})
+    assert bad["_error"]
+
+
+def test_0223_output_paths(tmp_path, monkeypatch):
+    import pytest
+
+    import safety
+    from csi_bridge import CSIValidationError
+    monkeypatch.setenv("CSI_MCP_OUTPUT", str(tmp_path / "out"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    (tmp_path / "home" / "Documents").mkdir(parents=True)
+    appdata = tmp_path / "AppData" / "Roaming"
+    (appdata / "Claude").mkdir(parents=True)
+    monkeypatch.setenv("APPDATA", str(appdata))
+    for name in ("TEMP", "TMP"):                  # pytest's tmp_path is inside TEMP (inside AppData on Windows)
+        monkeypatch.setenv(name, str(tmp_path / "tmp"))
+    for name in ("LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "WINDIR",
+                 "SYSTEMROOT"):
+        monkeypatch.setenv(name, str(tmp_path / "sys" / name))
+    monkeypatch.delenv("CSI_MCP_OUTPUT_DIRS", raising=False)
+    project = tmp_path / "project"
+    project.mkdir()
+    t = lambda path, ow=False, model=None: safety.output_target(  # noqa: E731
+        str(path), ".json", ow, "exports", "m", model, CSIValidationError)
+    assert t(project / "new.json") == (project / "new.json").resolve()           # a new file anywhere
+    (project / "old.json").write_text("{}")
+    with pytest.raises(CSIValidationError, match="exists"):
+        t(project / "old.json")
+    with pytest.raises(CSIValidationError, match="only in"):
+        t(project / "old.json", True)                                            # project folder not allowed ...
+    assert t(project / "old.json", True, str(project / "model.sdb"))           # ... unless it is the model's
+    monkeypatch.setenv("CSI_MCP_OUTPUT_DIRS", str(project))
+    assert t(project / "old.json", True)                                         # ... or listed by the user
+    (appdata / "Claude" / "claude_desktop_config.json").write_text("{}")
+    for ow in (False, True):
+        with pytest.raises(CSIValidationError, match="application-data"):
+            t(appdata / "Claude" / "claude_desktop_config.json", ow)
+    with pytest.raises(CSIValidationError, match="must end in .json"):
+        t(project / "x.txt")
+    a = safety.output_target(None, ".json", False, "exports", "m")
+    a.write_text("{}")
+    assert safety.output_target(None, ".json", False, "exports", "m") != a       # default names never collide
+    monkeypatch.setenv("TEMP", str(project))                                    # TEMP: new files yes, overwrite no
+    monkeypatch.delenv("CSI_MCP_OUTPUT_DIRS")
+    assert t(project / "other.json")
+    with pytest.raises(CSIValidationError, match="only in"):
+        t(project / "old.json", True)

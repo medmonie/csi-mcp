@@ -139,3 +139,83 @@ def snapshot_file(model_path: str, label: str = "") -> dict[str, Any]:
     saved = dt.datetime.fromtimestamp(src.stat().st_mtime).isoformat(timespec="seconds")
     return {"snapshot": str(dest), "model_file": str(src), "model_last_saved": saved,
             "note": "The snapshot is the model as last saved; changes not yet saved in the program are not in it."}
+
+
+# --------------------------------------------------------------------------- output paths (audit M4, 0.22.3)
+# A custom output_path may make a NEW file anywhere except system and application-data folders (TEMP allowed); it
+# may OVERWRITE an existing file only inside these folders: the output folder, the model's folder, Documents, Desktop
+# (also the OneDrive ones) and any folder in CSI_MCP_OUTPUT_DIRS (';'-separated). So `overwrite: true` cannot replace
+# e.g. claude_desktop_config.json under AppData.
+_NEVER = ("APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "WINDIR",
+          "SYSTEMROOT")
+
+
+def _under(path: Path, roots: list[Path]) -> bool:
+    for r in roots:
+        try:
+            path.relative_to(r)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _env_dirs(names: tuple[str, ...]) -> list[Path]:
+    out = []
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            out.append(Path(v).resolve())
+    return out
+
+
+def overwrite_roots(model_file: str | None = None) -> list[Path]:
+    home = Path.home()
+    roots = [output_root().resolve(), (home / "Documents").resolve(), (home / "Desktop").resolve()]
+    for od in _env_dirs(("ONEDRIVE", "ONEDRIVECOMMERCIAL", "ONEDRIVECONSUMER")):
+        roots += [od / "Documents", od / "Desktop"]
+    if model_file:
+        roots.append(Path(model_file).resolve().parent)
+    for extra in (os.environ.get("CSI_MCP_OUTPUT_DIRS") or "").split(";"):
+        if extra.strip():
+            roots.append(Path(extra.strip()).expanduser().resolve())
+    return roots
+
+
+def output_target(text: str | None, suffix: str, overwrite: bool, default_folder: str, stem: str,
+                  model_file: str | None = None, error: type[Exception] = ValueError) -> Path:
+    """Where an export goes: output_path checked (suffix, folder, system folders, overwrite scope), else a new
+    time-stamped file in the output folder that never collides."""
+    from csi_bridge import user_path
+    if not text:
+        folder = output_root() / default_folder
+        folder.mkdir(parents=True, exist_ok=True)
+        base = f"{safe_stem(stem)}_{stamp()}"
+        path, n = folder / f"{base}{suffix}", 2
+        while path.exists():
+            path, n = folder / f"{base}_{n}{suffix}", n + 1
+        return path
+    path = Path(user_path(text)).resolve()
+    if path.suffix.lower() != suffix:
+        raise error(f"output_path must end in {suffix}")
+    if not path.parent.is_dir():
+        raise error(f"Folder does not exist: {path.parent}")
+    # TEMP / TMP live inside AppData\Local on Windows: new files may go there (not overwrite, see below)
+    if _under(path, _env_dirs(_NEVER)) and not _under(path, [output_root().resolve(), *_env_dirs(("TEMP", "TMP"))]):
+        raise _err(error, f"{path.parent} is a system or application-data folder; exports are not written there.",
+                   "Choose a project folder, Documents or Desktop.")
+    if path.exists():
+        if not overwrite:
+            raise _err(error, f"{path} exists.", "Give another output_path, or overwrite: true.")
+        if not _under(path, overwrite_roots(model_file)):
+            raise _err(error, f"overwrite is allowed only in the output folder, the model's folder, Documents, "
+                       f"Desktop or a folder in CSI_MCP_OUTPUT_DIRS; {path} is outside them.",
+                       "Give a new file name, or ask the user to add the folder to CSI_MCP_OUTPUT_DIRS.")
+    return path
+
+
+def _err(error: type[Exception], message: str, hint: str) -> Exception:
+    try:
+        return error(message, hint=hint)        # CSI errors take a hint
+    except TypeError:
+        return error(f"{message} {hint}")

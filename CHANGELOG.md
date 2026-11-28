@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.22.3 - 2026-11-28
+
+The open items of the 0.22.0 code audit (project note csi-mcp-audit-0.22.0.md), checked one by one and taken where
+they hold. Offline tests 101 -> 104.
+- M3: a call stuck in the program (usually a dialog holding the COM thread) no longer makes later calls wait with no
+  answer. When the running call is older than its limit - CSI_MCP_BUSY_AFTER, default 120 s, or
+  CSI_MCP_BUSY_AFTER_LONG, default 1800 s, for long-running actions (analysis, design, reports, exports, opening
+  files) - new calls answer Busy at once ("if the program shows a dialog, close it"); help is never refused. The
+  progress messages of the stuck call say the same.
+- M4: exports with output_path (export_report, export_tables_to_excel, export_model_snapshot) go through one check
+  (safety.output_target, which also replaces the two copies of `_target`): a NEW file may be written anywhere except
+  system and application-data folders (AppData, ProgramData, Program Files, Windows; TEMP is allowed); an
+  EXISTING file may be
+  replaced (overwrite: true) only in the output folder, the model's folder, Documents, Desktop (also the OneDrive
+  ones) or a folder listed in CSI_MCP_OUTPUT_DIRS. So overwrite can no longer replace claude_desktop_config.json.
+  export_model_snapshot now also takes the folder variables of 0.22.1 in output_path.
+- M5: set_design_settings applies code, combinations and groups before preferences and overwrites; a failure after
+  the first change is now reported with what was already applied (`applied_before_failure`, `done`, settings read
+  back) instead of a plain validation error. `allow_unlock` removed from it: it was never read, and design settings
+  change without unlocking (measured in ETABS and SAP2000).
+- L6: the safety note says which actions take dry_run (select_objects changes only the on-screen selection).
+- L7: assign_frame_hinges now works in the units asked for (its table values and the read-back actual_distance, a
+  length, were in the display units). The other 11 actions named in the audit take `units` but carry no quantities
+  with units (factors, angles, ages in days, names) - unchanged.
+- L9: results are sent as single-line JSON (the SDK indented them by 2: about 27 % more characters for the same
+  content), with NaN / infinity as null so the text is valid JSON.
+- L15: install.bat passes its folder to PowerShell through an environment variable (a folder name with an apostrophe
+  broke the unblock step) and keeps the client-setup output in the server's own folder instead of a %RANDOM% name
+  in TEMP; uninstall.bat removes that file.
+- L16: the COM thread starts with the first CSI call, not when the server is imported (--configure-clients during
+  install no longer initialises COM).
+- Clean-up (audit section 5): db_edit.write_table is write_tables with one table; unused imports removed;
+  requirements pin `mcp==1.30.0` (the `[cli]` extra only added typer / rich, which the server never uses).
+- Not taken, with the reason: L8 (one tool with a free-form params object is the design; per-action help exists),
+  L10 / L11 (MCP SDK behaviour), L12 (needs the installed tunnel-client to check its flags), L13 (rows_file is a
+  path the user gives on purpose; its header is echoed only to name unknown fields), L14 (no case found where a CSI
+  array pair differs in length; a blanket change would touch 108 places), moving `same` / `_txt` (naming only).
+
 ## 0.22.2 - 2026-11-28
 
 Findings of the live capability check of the installed 0.22.1 (project note csi-mcp-live-check-0.22.1.md). Text and

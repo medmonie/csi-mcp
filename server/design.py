@@ -18,7 +18,7 @@ from typing import Any, Literal
 from pydantic import Field, model_validator
 
 import safety
-from actions import ALLOW_UNLOCK, DRY_RUN, SNAPSHOT, SOFTWARE, UNITS, Params, _dry, _take_snapshot, action, bridge
+from actions import ActionFailed, DRY_RUN, SNAPSHOT, SOFTWARE, UNITS, Params, _dry, _take_snapshot, action, bridge
 from csi_bridge import COMError, CSIApiError, CSIError, CSIValidationError, Software, UnitPreset, api_call, as_list, \
     describe_units
 from db_edit import read_table, write_table
@@ -201,7 +201,8 @@ class DesignSetP(_KindP):
     overwrites: list[RowUpdateD] | None = Field(default=None, max_length=2000, description=(
         "member overwrites in the code's overwrites table: rows matched by fields (e.g. {'UniqueName': '12'}) get "
         "the values given (from the designer)"))
-    allow_unlock: bool = ALLOW_UNLOCK
+    # no allow_unlock: design settings change without unlocking the model (measured in ETABS and SAP2000, 0.22.0;
+    # audit M5 - it was accepted and never read)
     dry_run: bool = DRY_RUN
     snapshot: bool = SNAPSHOT
 
@@ -218,6 +219,79 @@ class DesignSetP(_KindP):
 def _same(a: Any, b: Any) -> bool:
     from tables_edit import same
     return same(a, b)
+
+
+def _safe_settings(sap: Any, p: "DesignSetP") -> Any:
+    try:
+        return read_settings(sap, p.software, p.kind, p.units)
+    except Exception as exc:  # noqa: BLE001 - reported, the real error is already being raised
+        return f"could not be read: {exc}"
+
+
+def _apply_design_settings(p: "DesignSetP", sap: Any, obj: Any, before: dict[str, Any], pref_key: Any,
+                           done: dict[str, Any], applied: list[str]) -> None:
+    if p.code is not None and p.code != before["code"]:
+        try:
+            api_call(f"{COLL[p.kind]}.SetCode", obj.SetCode, p.code)
+        except CSIApiError as exc:
+            raise CSIValidationError(f"The program refused code '{p.code}'.",
+                                     hint="Use the code name exactly as the program lists it (its Design > "
+                                          "Preferences dialog), e.g. 'ACI 318-19'.") from exc
+        now = read_code(sap, p.kind)
+        if not now or _norm(now) != _norm(p.code):
+            if before["code"]:
+                with contextlib.suppress(Exception):
+                    obj.SetCode(before["code"])
+            raise CSIValidationError(f"After SetCode('{p.code}') the model reports code '{now}'; the previous code "
+                                     "was put back.", hint="Give the code name exactly as the program lists it.")
+        done["code"] = now
+        applied.append(f"code {now}")
+    if p.auto_generate_combinations is not None:
+        api_call(f"{COLL[p.kind]}.SetComboAutoGenerate", obj.SetComboAutoGenerate, p.auto_generate_combinations)
+        applied.append(f"auto_generate_combinations {p.auto_generate_combinations}")
+    for meth, sel in (("SetComboStrength", p.strength_combinations), ("SetComboDeflection", p.deflection_combinations),
+                      ("SetGroup", p.design_groups)):
+        for name, on in (sel or {}).items():
+            api_call(f"{COLL[p.kind]}.{meth}('{name}')", getattr(obj, meth), name, bool(on))
+            applied.append(f"{meth} {name} {bool(on)}")
+    with bridge.units_scope(sap, p.units):
+        if p.preferences:
+            key = read_settings(sap, p.software, p.kind, p.units).get("preferences_table") or pref_key
+            version, fields, rows = read_table(sap, key)
+            if len(rows) != 1:
+                raise CSIValidationError(f"'{key}' has {len(rows)} rows; give the change as overwrites-style "
+                                         "match / set rows instead.")
+            from tables_edit import _txt
+            row = {**rows[0], **{k: _txt(v) for k, v in p.preferences.items()}}
+            done["preferences_import"] = write_table(sap, key, version, fields, [row])
+            applied.append(f"preferences {sorted(p.preferences)}")
+            _, _, back = read_table(sap, key)
+            wrong = {k: back[0].get(k) for k, v in p.preferences.items() if not _same(back[0].get(k), _txt(v))}
+            if wrong:
+                raise CSIValidationError(f"Preferences read back differently: {wrong}.",
+                                         hint="The program may limit or recode these values; see the table.")
+        if p.overwrites:
+            code = read_code(sap, p.kind)
+            ts = design_tables(sap, p.kind, code, "overwrites")
+            if not ts:
+                raise CSIValidationError("No overwrites table for this design kind / code.")
+            key = ts[0]["key"]
+            version, fields, rows = read_table(sap, key)
+            from tables_edit import _matches, _txt
+            changed = 0
+            for u in p.overwrites:
+                bad = sorted((set(u.match) | set(u.set)) - set(fields))
+                if bad:
+                    raise CSIValidationError(f"'{key}' has no fields {bad}.", hint=f"Fields: {fields}")
+                hit = [r for r in rows if _matches(r, u.match)]
+                if not hit:
+                    raise CSIValidationError(f"overwrites {u.match}: no row matches in '{key}'.")
+                for r in hit:
+                    r.update({k: _txt(v) for k, v in u.set.items()})
+                    changed += 1
+            done["overwrites_import"] = {**write_table(sap, key, version, fields, rows), "rows_changed": changed,
+                                         "table": key}
+            applied.append(f"overwrites {changed} rows")
 
 
 @action("set_design_settings", "Configure design with values the designer gives: the code (named in the request), "
@@ -257,63 +331,16 @@ def set_design_settings(p: DesignSetP) -> dict[str, Any]:
         return _dry(plan, preferences_table=pref_key)
     snap = _take_snapshot(p.software, sap, "before_design_settings") if p.snapshot else None
     done: dict[str, Any] = {}
-    if p.code is not None and p.code != before["code"]:
-        try:
-            api_call(f"{COLL[p.kind]}.SetCode", obj.SetCode, p.code)
-        except CSIApiError as exc:
-            raise CSIValidationError(f"The program refused code '{p.code}'.",
-                                     hint="Use the code name exactly as the program lists it (its Design > "
-                                          "Preferences dialog), e.g. 'ACI 318-19'.") from exc
-        now = read_code(sap, p.kind)
-        if not now or _norm(now) != _norm(p.code):
-            if before["code"]:
-                with contextlib.suppress(Exception):
-                    obj.SetCode(before["code"])
-            raise CSIValidationError(f"After SetCode('{p.code}') the model reports code '{now}'; the previous code "
-                                     "was put back.", hint="Give the code name exactly as the program lists it.")
-        done["code"] = now
-    if p.auto_generate_combinations is not None:
-        api_call(f"{COLL[p.kind]}.SetComboAutoGenerate", obj.SetComboAutoGenerate, p.auto_generate_combinations)
-    for meth, sel in (("SetComboStrength", p.strength_combinations), ("SetComboDeflection", p.deflection_combinations),
-                      ("SetGroup", p.design_groups)):
-        for name, on in (sel or {}).items():
-            api_call(f"{COLL[p.kind]}.{meth}('{name}')", getattr(obj, meth), name, bool(on))
-    with bridge.units_scope(sap, p.units):
-        if p.preferences:
-            key = read_settings(sap, p.software, p.kind, p.units).get("preferences_table") or pref_key
-            version, fields, rows = read_table(sap, key)
-            if len(rows) != 1:
-                raise CSIValidationError(f"'{key}' has {len(rows)} rows; give the change as overwrites-style "
-                                         "match / set rows instead.")
-            from tables_edit import _txt
-            row = {**rows[0], **{k: _txt(v) for k, v in p.preferences.items()}}
-            done["preferences_import"] = write_table(sap, key, version, fields, [row])
-            _, _, back = read_table(sap, key)
-            wrong = {k: back[0].get(k) for k, v in p.preferences.items() if not _same(back[0].get(k), _txt(v))}
-            if wrong:
-                raise CSIValidationError(f"Preferences read back differently: {wrong}.",
-                                         hint="The program may limit or recode these values; see the table.")
-        if p.overwrites:
-            code = read_code(sap, p.kind)
-            ts = design_tables(sap, p.kind, code, "overwrites")
-            if not ts:
-                raise CSIValidationError("No overwrites table for this design kind / code.")
-            key = ts[0]["key"]
-            version, fields, rows = read_table(sap, key)
-            from tables_edit import _matches, _txt
-            changed = 0
-            for u in p.overwrites:
-                bad = sorted((set(u.match) | set(u.set)) - set(fields))
-                if bad:
-                    raise CSIValidationError(f"'{key}' has no fields {bad}.", hint=f"Fields: {fields}")
-                hit = [r for r in rows if _matches(r, u.match)]
-                if not hit:
-                    raise CSIValidationError(f"overwrites {u.match}: no row matches in '{key}'.")
-                for r in hit:
-                    r.update({k: _txt(v) for k, v in u.set.items()})
-                    changed += 1
-            done["overwrites_import"] = {**write_table(sap, key, version, fields, rows), "rows_changed": changed,
-                                         "table": key}
+    applied: list[str] = []      # steps already written to the model (audit M5)
+    try:
+        _apply_design_settings(p, sap, obj, before, pref_key, done, applied)
+    except Exception as exc:
+        if not applied:
+            raise                # nothing changed yet: the plain error is the whole story
+        raise ActionFailed({"message": f"set_design_settings stopped part-way: {exc}",
+                            "error_type": type(exc).__name__, "hint": getattr(exc, "hint", ""),
+                            "applied_before_failure": applied, "done": done,
+                            "settings_now": _safe_settings(sap, p)}) from exc
     after = read_settings(sap, p.software, p.kind, p.units)
     extra: dict[str, Any] = {}
     if after["combinations"].get("unconfirmed") and (p.strength_combinations or p.deflection_combinations):

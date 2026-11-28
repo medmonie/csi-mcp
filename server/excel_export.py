@@ -18,7 +18,7 @@ from pydantic import Field
 import safety
 from actions import (SOFTWARE, UNITS, Params, _read_selected, _selection, _status_core, action, bridge)
 from autoload import table_fields
-from csi_bridge import Software, UnitPreset, describe_units, user_path
+from csi_bridge import Software, UnitPreset, describe_units
 from table_tools import TableError, filter_by_cases, resolve_exact_key, rows_to_dataframe, suggest_keys
 
 MAX_ROWS = 1_048_000
@@ -49,19 +49,8 @@ def _sheet_name(key: str, used: set[str]) -> str:
 
 
 def _target(p: ExcelP, model_file: str | None) -> Path:
-    if p.output_path:
-        path = Path(user_path(p.output_path)).resolve()
-        if path.suffix.lower() != ".xlsx":
-            raise TableError("output_path must end in .xlsx")
-        if not path.parent.is_dir():
-            raise TableError(f"Folder does not exist: {path.parent}")
-        if path.exists() and not p.overwrite:
-            raise TableError(f"{path} exists.", hint="Give another output_path, or overwrite: true.")
-        return path
-    folder = safety.output_root() / "exports"
-    folder.mkdir(parents=True, exist_ok=True)
-    stem = safety.safe_stem(Path(model_file or f"{p.software}_model").stem)
-    return folder / f"{stem}_tables_{safety.stamp()}.xlsx"
+    return safety.output_target(p.output_path, ".xlsx", p.overwrite, "exports",
+                                f"{Path(model_file or f'{p.software}_model').stem}_tables", model_file, TableError)
 
 
 @action("export_tables_to_excel", "Database tables to one Excel workbook, a sheet per table (as the programs' Export "

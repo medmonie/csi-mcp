@@ -270,7 +270,14 @@ class ComExecutor:
         self._ready: Future = Future()
         self._joined = False
         self._thread = threading.Thread(target=self._loop, name="csi-com-sta", daemon=True)
-        self._thread.start()
+        self._started = False      # the STA thread (and COM) start with the first call, not at import (audit L16):
+                                   # --configure-clients, help and the tests then never touch COM
+
+    def _ensure_started(self) -> None:
+        with self._lock:
+            if not self._started and not self._closed:
+                self._started = True
+                self._thread.start()
 
     def _loop(self) -> None:
         try:
@@ -308,6 +315,9 @@ class ComExecutor:
 
     def submit(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> Future:
         future: Future = Future()
+        self._ensure_started()
+        if not self._started:
+            raise RuntimeError("COM executor is shut down")
         self._ready.result()
         with self._lock:
             if self._closed:
@@ -330,6 +340,9 @@ class ComExecutor:
     def shutdown(self, before_uninit: Callable[[], None] | None = None, timeout: float = 30.0) -> None:
         """Release COM references, then CoUninitialize on the STA thread."""
         with self._lock:
+            if not self._started:          # never used: nothing to release
+                self._closed = True
+                return
             if not self._closed:
                 self._closed = True
                 while True:

@@ -16,7 +16,7 @@ program**, each with one tool named after it: **`etabs(action, params)`, `sap200
 | ETABS | 23.2.0 | OK | OK |
 | SAFE | 23.3.2 | OK | OK |
 
-Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.22.2
+Windows 11, Python 3.15.1 64-bit, `mcp` 1.30.0, comtypes 1.5.0, pandas 3.1.1, reportlab 5.1.2. Version 0.22.3
 (roadmap Phases 0-2 with V1 verification: 238 / 238 values match CSI's published results: foundation, full model read, results depth; report stages R1-R3; Phase 3 first batch:
 area mesh, joint patterns, area loads; 0.7.0: one server per program; 0.8.0: definitions - materials, sections,
 springs, patterns, cases, combinations, mass source; 0.9.0: objects - points, frames, areas, their assignments,
@@ -28,7 +28,8 @@ new models and models from a JSON / XLSX spec; 0.13.0: Phase 6 - design with the
 batch - ETABS stories, diaphragms, piers / spandrels, ASCE 7-16 automatic seismic loads, links; Phase 5 completed in
 0.19.0; 0.20.0 Word / RTF reports and tables to Excel; Phase 8: 0.21.0 frame rebar, 0.22.0 Section Designer and
 non-prismatic sections, ETABS staged construction and ETABS design combinations; 0.22.1 audit fixes (cancellation,
-path variables, frame size, help size); 0.22.2 description text and help fixes).
+path variables, frame size, help size); 0.22.2 description text and help fixes; 0.22.3 the
+remaining audit items: busy watchdog, export overwrite scope, design-settings partial failure, compact results).
 
 ## Install
 
@@ -130,6 +131,14 @@ the PDF and written in full to a CSV next to it. Default location `Documents\Csi
 
 `CSI_MCP_OUTPUT`, else `Documents\CsiMcp`: `reports\` (PDFs), `exports\` (full tables: `query_database_table` writes
 one automatically when the rows are cut to `max_rows`, or always with `export: csv | json`), and `change_log.jsonl`.
+
+A custom `output_path` may create a new file anywhere except system and application-data folders; it may replace an
+existing file (`overwrite: true`) only in the output folder, the model's folder, Documents, Desktop or a folder listed
+in `CSI_MCP_OUTPUT_DIRS` (`;`-separated, in the server's environment).
+
+`CSI_MCP_BUSY_AFTER` (default 120 s) / `CSI_MCP_BUSY_AFTER_LONG` (default 1800 s, analysis, design, reports): once
+the call the program is working on is older than this, new calls answer `Busy` at once - usually a dialog in the
+program is waiting to be closed.
 
 ## Behaviour that protects the model
 

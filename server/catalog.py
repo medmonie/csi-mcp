@@ -12,7 +12,7 @@ import edition
 import programs
 from actions import ACTIONS, Action
 
-SERVER_VERSION = "0.22.2"
+SERVER_VERSION = "0.22.3"
 
 UNITS_NOTE = (
     "UNITS: every action that reads or writes numbers takes params.units (default kN_m_C = kN, m, C; also Ton_m_C, "
@@ -45,11 +45,14 @@ def software_note() -> str:
 
 
 SAFETY_NOTE = (
-    "SAFETY AND OUTPUT: every edit action takes dry_run: true (checks everything, reports what it would do, changes "
-    "nothing) - use it to show the user the plan before a change they have not seen. Modelling edits and run_analysis "
-    "take snapshot: true (copy of the model file as last saved, first). Every edit that runs is logged in "
-    "Documents\\CsiMcp\\change_log.jsonl. Big tables go to a CSV in Documents\\CsiMcp\\exports (export_path); "
-    "reports go to Documents\\CsiMcp\\reports unless output_path is given."
+    "SAFETY AND OUTPUT: every edit action that changes the model or its files takes dry_run: true (checks "
+    "everything, reports what it would do, changes nothing; select_objects only changes the on-screen selection and "
+    "has none) - use it to show the user the plan before a change they have not seen. Modelling edits and "
+    "run_analysis take snapshot: true (copy of the model file as last saved, first). Every edit that runs is logged "
+    "in Documents\\CsiMcp\\change_log.jsonl. Big tables go to a CSV in Documents\\CsiMcp\\exports (export_path); "
+    "reports go to Documents\\CsiMcp\\reports unless output_path is given. An output_path may replace an existing "
+    "file (overwrite: true) only in the output folder, the model's folder, Documents, Desktop or a folder in "
+    "CSI_MCP_OUTPUT_DIRS, and never writes into system or application-data folders."
 )
 
 GROUP_ORDER = ("Session", "Model", "Model reading", "Definitions", "Objects", "Modelling", "Geometry", "Bulk editing",

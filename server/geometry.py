@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from actions import Params, _dry, _refresh_view, action, bridge
+from actions import _dry, _refresh_view, action, bridge
 from csi_bridge import CSIValidationError, api_call, as_list, describe_units
 from model_read import _names, _try
 from modelling import _start_edit, _targets
